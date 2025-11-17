@@ -1,0 +1,1 @@
+Using printenv | grep JIRA to access the environment variables to access the Jira REST or equivilant endpoint.

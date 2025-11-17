@@ -1,0 +1,65 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*.local
+.env.local.test
+coverage
+
+# Playwright test artifacts
+playwright-report
+test-results
+playwright/.auth/
+
+# GraphQL introspection cache
+.schema-introspected.graphql
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.__mf__temp
+
+# Terraform state files (contain sensitive data)
+*.tfstate
+*.tfstate.backup
+
+# Terraform plan output files
+*.tfplan
+
+# Terraform lock file (specific to your machine)
+.terraform.lock.hcl
+
+# Terraform working directory (generated files)
+.terraform/
+
+# Crash logs (if Terraform crashes)
+crash.log
+
+# Ignore any custom variable files with secrets
+terraform.tfvars
+terraform.tfvars.json
+.pnpm-store
+
+output
+dist_*
+
+# i18next-scanner output
+.i18next-scanner/
