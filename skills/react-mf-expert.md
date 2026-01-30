@@ -2,7 +2,6 @@
 name: react-mf-expert
 description: |
   Expert consultant for React Module Federation micro-frontends using bulletproof-react architecture patterns. Use for code review, architectural guidance, implementation consulting, pattern validation, troubleshooting Module Federation/GraphQL/state management, and ESLint/config review. For scaffolding new projects, use the react-mf-scaffolder agent instead.
-model: sonnet
 ---
 
 # React Module Federation Expert
