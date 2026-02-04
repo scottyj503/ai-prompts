@@ -1,8 +1,16 @@
 ---
-description: Fetch Jira issue details using REST API
+description: Get branch context and fetch Jira issue details
 argument-hint: [issue-key]
-allowed-tools: Bash(printenv:*), Bash(curl:*)
+allowed-tools: Bash(git:*), Bash(printenv:*), Bash(curl:*)
 ---
+
+Execute the following tasks in sequence for issue key: $ARGUMENTS
+
+## Task 1: Build Branch Context
+
+Run a git diff comparing this branch to main/master to understand what changes have been made. This provides context for the work being done.
+
+## Task 2: Fetch Jira Issue Details
 
 Fetch the Jira issue details for issue key: $ARGUMENTS
 
@@ -18,6 +26,10 @@ curl -sL -H "$AUTH_HEADER" -H "Content-Type: application/json" \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/{issueKey}?fields=summary,description,status,issuetype,priority,assignee,reporter,created,updated"
 ```
 
-Display the results in a readable markdown format with:
+Display the Jira results in a readable markdown format with:
 - A table for metadata (key, type, status, priority, assignee, reporter, dates)
 - Formatted sections for description and acceptance criteria
+
+## Summary
+
+After completing both tasks, provide a brief summary connecting the branch changes to the Jira issue requirements.
