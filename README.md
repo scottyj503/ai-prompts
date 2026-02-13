@@ -1,19 +1,25 @@
-# Claude Code Agents
+# Claude Code Agents, Skills & Commands
 
-A collection of specialized AI agents for Claude Code CLI to automate complex development workflows.
+A collection of specialized AI agents, expert skills, and workflow commands for Claude Code CLI to automate complex development workflows.
 
 ## Overview
 
-This repository contains production-ready agents that extend Claude Code's capabilities for AWS serverless development, React micro-frontends, Java/Quarkus applications, gap analysis, and Jira story creation.
+This repository contains production-ready extensions that enhance Claude Code's capabilities for AWS serverless development, React micro-frontends, Java/Quarkus applications, infrastructure-as-code, technical design, gap analysis, and Jira story creation.
+
+The extensions are organized into three categories:
+
+- **Agents** — Autonomous subprocesses that scaffold projects, analyze codebases, and generate artifacts
+- **Skills** — Expert consultants invoked inline for code review, architecture guidance, and troubleshooting
+- **Commands** — Slash commands (`/command-name`) for common workflow tasks like fetching Jira issues, creating PRs, and reviewing code
 
 ## Available Agents
 
-### 1. **gap-analysis** (941 lines)
+### 1. **gap-analysis**
 Performs multi-dimensional gap analysis across code repositories, schemas, scenarios, and UI designs.
 
 **Use Cases:**
 - Analyzing AWS serverless implementations (Lambda, DynamoDB, AppSync, React)
-- Validating schema → code alignment
+- Validating schema-to-code alignment
 - Checking GAAP compliance for financial systems
 - Validating TypeScript, React, GraphQL, and AWS Lambda best practices
 - Identifying missing implementations and inconsistencies
@@ -26,7 +32,7 @@ Performs multi-dimensional gap analysis across code repositories, schemas, scena
 
 ---
 
-### 2. **jira-story-creator** (1,957 lines)
+### 2. **jira-story-creator**
 Converts schema documentation and gap analysis findings into well-structured Jira epics and stories.
 
 **Use Cases:**
@@ -43,7 +49,7 @@ Converts schema documentation and gap analysis findings into well-structured Jir
 
 ---
 
-### 3. **schema-documentation** (510 lines)
+### 3. **schema-documentation**
 Generates comprehensive, professional documentation for JSON schemas and workflow examples.
 
 **Use Cases:**
@@ -59,8 +65,8 @@ Generates comprehensive, professional documentation for JSON schemas and workflo
 
 ---
 
-### 4. **react-mf-agent** (1,827 lines)
-Specialized agent for creating React Module Federation micro-frontends following bulletproof-react architecture.
+### 4. **react-mf-scaffolder**
+Scaffolds new React Module Federation micro-frontend projects from scratch following bulletproof-react architecture.
 
 **Use Cases:**
 - Scaffolding new Module Federation micro-frontends
@@ -69,7 +75,9 @@ Specialized agent for creating React Module Federation micro-frontends following
 - Setting up React Query for server state
 - Configuring Playwright E2E and Vitest unit tests
 
-**Triggers:** Automatically invoked when you request React Module Federation setup or component creation.
+**Triggers:** Automatically invoked when you request React Module Federation project scaffolding.
+
+**Note:** For code review, architecture consultation, or working with existing code, use the `react-mf-expert` **skill** instead.
 
 **Stack:**
 - Module Federation with Vite
@@ -80,8 +88,8 @@ Specialized agent for creating React Module Federation micro-frontends following
 
 ---
 
-### 5. **java-quarkus-agent** (111 lines)
-Generates Java/Quarkus projects and components following best practices.
+### 5. **java-quarkus-scaffolder**
+Scaffolds new Java/Quarkus projects and components following best practices.
 
 **Use Cases:**
 - Creating new Quarkus REST API projects
@@ -89,7 +97,9 @@ Generates Java/Quarkus projects and components following best practices.
 - Setting up Kafka messaging integration
 - Implementing CRUD operations with security
 
-**Triggers:** Automatically invoked when you request Quarkus project scaffolding or Java component generation.
+**Triggers:** Automatically invoked when you request Quarkus project scaffolding.
+
+**Note:** For code review, architecture consultation, or working with existing code, use the `java-quarkus-expert` **skill** instead.
 
 **Stack:**
 - Quarkus framework
@@ -102,7 +112,7 @@ Generates Java/Quarkus projects and components following best practices.
 
 ---
 
-### 6. **code-quality-reviewer** (129 lines)
+### 6. **code-quality-reviewer**
 Reviews code quality across multiple programming languages, ensuring adherence to best practices and linting rules.
 
 **Use Cases:**
@@ -118,31 +128,123 @@ Reviews code quality across multiple programming languages, ensuring adherence t
 
 ---
 
+### 7. **adr-compliance-reviewer**
+Analyzes repositories for compliance with accepted Architecture Decision Records (ADRs).
+
+**Use Cases:**
+- Verifying new services follow architectural guidelines
+- Pre-release compliance checks
+- Auditing ADR adherence across a codebase
+
+**ADRs Checked:**
+- ADR-001: Prefixed Base62 Entity Identifiers
+- ADR-002: Backend For Frontend with AppSync
+- ADR-003: React/Vite Frontend
+- ADR-004: Module Federation Micro Frontends
+- ADR-005: Zustand State Management
+
+**Triggers:** Automatically invoked when you request ADR compliance analysis or before major releases.
+
+**Output:** Detailed compliance report with specific `file:line` references for violations.
+
+---
+
+### 8. **tech-design**
+Creates comprehensive technical design documentation for AWS serverless applications following a Technical Review Checklist.
+
+**Use Cases:**
+- Planning new AWS serverless features before development
+- Documenting existing architecture for knowledge transfer
+- Generating architecture diagrams (Mermaid/PlantUML/ASCII)
+- Documenting data models (DynamoDB), API contracts, security flows, and capacity planning
+- Validating design completeness against a checklist
+
+**Triggers:** Automatically invoked when planning new features or documenting existing systems.
+
+**Output:** Markdown design document ready for technical review. Can feed into `gap-analysis` agent.
+
+---
+
+## Available Skills
+
+Skills are expert consultants that run inline (not as subagents). They provide guidance, review, and troubleshooting without generating full project scaffolds.
+
+### 1. **java-quarkus-expert**
+Expert consultant for Java/Quarkus application development with Gradle.
+
+**Use For:** Code review, architectural guidance, implementation consulting, pattern validation, troubleshooting, testing strategy, and security review.
+
+**Scaffolding?** Use the `java-quarkus-scaffolder` agent instead.
+
+---
+
+### 2. **react-mf-expert**
+Expert consultant for React Module Federation micro-frontends using bulletproof-react architecture patterns.
+
+**Use For:** Code review, architectural guidance, implementation consulting, pattern validation, troubleshooting Module Federation/GraphQL/state management, and ESLint/config review.
+
+**Scaffolding?** Use the `react-mf-scaffolder` agent instead.
+
+---
+
+### 3. **react-testing-expert**
+Expert consultant for comprehensive React testing strategies.
+
+**Use For:** Testing strategy, mocking patterns, test data generation with Faker.js, coverage guidance, and debugging failing tests.
+
+**Covers:** Unit tests (Vitest), integration tests (React Testing Library), E2E tests (Playwright), and API tests (GraphQL).
+
+---
+
+## Available Commands
+
+Commands are slash commands invoked as `/command-name` (or `/command-name <arguments>`) for common workflow tasks.
+
+| Command | Description |
+|---------|-------------|
+| `/catchup` | Git diff this branch against main/master to build context |
+| `/catchUpAndGetJira <issue-key>` | Build branch context via git diff + fetch Jira issue details |
+| `/get-jira <issue-key>` | Fetch Jira issue details (summary, description, status, priority) |
+| `/getConfluencePage <page-id\|url\|title>` | Fetch and render a Confluence page as markdown (optional `--prompt` for analysis) |
+| `/getPRComments <pr-number>` | Fetch GitHub PR comments and analyze codebase in context (optional `--author` filter) |
+| `/codereview <pr-number>` | Pull down a PR and run the code-quality-reviewer agent on it |
+| `/codeReviewUpdate <commit-sha>` | Re-review after changes have been made to a PR |
+| `/create-pr` | Add, commit, push, and create a pull request via GitHub CLI |
+| `/reviewitadr` | Run the adr-compliance-reviewer agent on the current repository |
+| `/java-branch-refactor` | Analyze the git diff for this branch and identify refactoring opportunities (Java/Quarkus) |
+| `/mergeandresolve` | Merge master and resolve conflicts, then verify build/lint/tests pass |
+
+---
+
 ## Installation
 
 ### Project-Level (Recommended for Teams)
 
-Copy agents to your project's `.claude/agents/` directory:
+Copy the directories to your project's `.claude/` directory:
 
 ```bash
-mkdir -p .claude/agents
-cp *.md .claude/agents/
+mkdir -p .claude/agents .claude/commands .claude/skills
+cp agents/*.md .claude/agents/
+cp commands/*.md .claude/commands/
+cp skills/*.md .claude/skills/
 ```
 
 ### User-Level (Available Across All Projects)
 
-Copy agents to your home directory:
+Copy to your home directory:
 
 ```bash
-mkdir -p ~/.claude/agents
-cp *.md ~/.claude/agents/
+mkdir -p ~/.claude/agents ~/.claude/commands ~/.claude/skills
+cp agents/*.md ~/.claude/agents/
+cp commands/*.md ~/.claude/commands/
+cp skills/*.md ~/.claude/skills/
 ```
 
 ## Usage
 
 ### Automatic Invocation (Recommended)
 
-Simply describe what you want to accomplish, and Claude will automatically invoke the appropriate agent:
+Simply describe what you want to accomplish, and Claude will automatically invoke the appropriate agent or skill:
 
 ```bash
 # Triggers gap-analysis agent
@@ -151,10 +253,10 @@ Simply describe what you want to accomplish, and Claude will automatically invok
 # Triggers jira-story-creator agent
 "Create Jira stories from these approved gaps"
 
-# Triggers react-mf-agent
-"Create a new Module Federation component for user profiles"
+# Triggers react-mf-scaffolder agent
+"Scaffold a new Module Federation project for user profiles"
 
-# Triggers java-quarkus-agent
+# Triggers java-quarkus-scaffolder agent
 "Generate a Quarkus REST API for order management"
 
 # Triggers schema-documentation agent
@@ -162,16 +264,36 @@ Simply describe what you want to accomplish, and Claude will automatically invok
 
 # Triggers code-quality-reviewer agent
 "Review the code quality of my recent changes"
+
+# Triggers tech-design agent
+"Create a technical design document for the new notifications feature"
+
+# Triggers adr-compliance-reviewer agent
+"Check this repo for ADR compliance"
 ```
 
-### Manual Invocation
-
-You can also explicitly request a specific agent:
+### Slash Commands
 
 ```bash
-/agent gap-analysis
-/agent jira-story-creator
-/agent react-mf-agent
+/get-jira PROJ-123
+/catchup
+/codereview 42
+/create-pr
+/reviewitadr
+/getConfluencePage 12345678 --prompt="summarize the critical path"
+```
+
+### Skills (Inline Expert Consultation)
+
+```bash
+# Triggers java-quarkus-expert skill
+"Review this Quarkus service for best practices"
+
+# Triggers react-mf-expert skill
+"Should I use Zustand or React Query for this state?"
+
+# Triggers react-testing-expert skill
+"Help me write Playwright tests for the login flow"
 ```
 
 ## Agent Architecture
@@ -190,12 +312,13 @@ model: sonnet
 ---
 ```
 
-### Key Features
-- ✅ **Proactive triggers** for automatic invocation
-- ✅ **Explicit tool restrictions** for security
-- ✅ **Clear activation scenarios** in descriptions
-- ✅ **Cross-references** between related agents
-- ✅ **Focused, single-responsibility** design
+### Key Design Principles
+- **Proactive triggers** for automatic invocation
+- **Explicit tool restrictions** for security
+- **Clear activation scenarios** in descriptions
+- **Cross-references** between related agents and skills
+- **Focused, single-responsibility** design
+- **Agent/Skill separation**: Agents scaffold, Skills consult
 
 ## Workflows
 
@@ -204,33 +327,64 @@ model: sonnet
 1. **Gap Analysis Phase**
    ```
    User: "Analyze gaps between my schemas and Lambda implementations"
-   → gap-analysis agent analyzes code, schemas, scenarios
-   → Presents findings and proposed stories
-   → User approves/revises story list
+   -> gap-analysis agent analyzes code, schemas, scenarios
+   -> Presents findings and proposed stories
+   -> User approves/revises story list
    ```
 
 2. **Jira Creation Phase**
    ```
    User: "Create Jira stories from approved gaps"
-   → jira-story-creator agent creates epics and stories
-   → Links dependencies with "Blocks" relationships
-   → Documents constraints and acceptance criteria
+   -> jira-story-creator agent creates epics and stories
+   -> Links dependencies with "Blocks" relationships
+   -> Documents constraints and acceptance criteria
    ```
 
 ### Direct Schema-to-Jira (Skip Gap Analysis)
 
 ```
 User: "Create Jira stories from api-schema.json"
-→ jira-story-creator agent reads schema directly
-→ Generates implementation stories
-→ No gap analysis needed
+-> jira-story-creator agent reads schema directly
+-> Generates implementation stories
+-> No gap analysis needed
+```
+
+### Tech Design to Gap Analysis
+
+```
+User: "Create a technical design for the new billing feature"
+-> tech-design agent interviews, scans code, generates design doc
+-> User approves design
+User: "Now analyze gaps against the design"
+-> gap-analysis agent uses design doc as input
+```
+
+### React Development with Review
+
+```
+/react-mf-scaffolder (scaffold project)
+  -> react-mf-expert skill (architecture guidance)
+  -> react-testing-expert skill (testing strategy)
+  -> code-quality-reviewer agent (validate quality)
+```
+
+### Branch Workflow with Jira Context
+
+```
+/catchUpAndGetJira PROJ-123
+  -> Builds branch diff context + fetches Jira details
+  -> Work on the feature...
+/codereview 42
+  -> Reviews the PR
+/mergeandresolve
+  -> Merges master and resolves conflicts
 ```
 
 ## Configuration
 
-### Environment Variables (for Jira)
+### Environment Variables (for Jira & Confluence)
 
-Required for `jira-story-creator` agent:
+Required for `jira-story-creator` agent, `/get-jira`, `/catchUpAndGetJira`, and `/getConfluencePage` commands:
 
 ```bash
 export JIRA_USER_EMAIL="your-email@company.com"
@@ -240,43 +394,41 @@ export JIRA_BASE_URL="your-company.atlassian.net"
 
 ### External Rules
 
-**java-quarkus-agent** references `~/.claude/java_rules.md` for comprehensive Java development guidelines. Ensure this file exists if using the Java agent.
+- **java-quarkus-scaffolder** references `~/.claude/java_rules.md` for comprehensive Java development guidelines. Ensure this file exists if using the Java agent.
 
 ## Best Practices
 
-### When to Use Each Agent
+### When to Use Each Extension
 
-| Scenario | Agent |
-|----------|-------|
-| "Is my implementation complete?" | gap-analysis |
-| "Create Jira tasks from requirements" | jira-story-creator |
-| "Document this schema" | schema-documentation |
-| "Build a React micro-frontend" | react-mf-agent |
-| "Generate a Quarkus service" | java-quarkus-agent |
-| "Review my code quality" | code-quality-reviewer |
+| Scenario | Extension | Type |
+|----------|-----------|------|
+| "Is my implementation complete?" | gap-analysis | Agent |
+| "Create Jira tasks from requirements" | jira-story-creator | Agent |
+| "Document this schema" | schema-documentation | Agent |
+| "Scaffold a React micro-frontend" | react-mf-scaffolder | Agent |
+| "Scaffold a Quarkus service" | java-quarkus-scaffolder | Agent |
+| "Review my code quality" | code-quality-reviewer | Agent |
+| "Check ADR compliance" | adr-compliance-reviewer | Agent |
+| "Create a technical design doc" | tech-design | Agent |
+| "Review this Java code" | java-quarkus-expert | Skill |
+| "Help with React MF architecture" | react-mf-expert | Skill |
+| "Help me write tests" | react-testing-expert | Skill |
+| "What changed on this branch?" | /catchup | Command |
+| "Get Jira issue details" | /get-jira | Command |
+| "Create a pull request" | /create-pr | Command |
 
-### Agent Combinations
+### Agent vs. Skill
 
-**Gap Analysis → Jira Creation**
-```
-gap-analysis (identify gaps)
-  → User approves findings
-  → jira-story-creator (create stories)
-```
-
-**React Development → Code Review**
-```
-react-mf-agent (create components)
-  → code-quality-reviewer (validate quality)
-```
+- **Use an Agent** when you need something **generated** — a new project, a report, Jira stories, documentation
+- **Use a Skill** when you need **expert advice** — code review, architecture guidance, troubleshooting
 
 ## Customization
 
-### Modifying Agents
+### Modifying Extensions
 
-All agents are markdown files with clear section structure:
+All extensions are markdown files with clear section structure:
 
-1. **YAML Frontmatter**: Agent metadata and configuration
+1. **YAML Frontmatter**: Metadata and configuration
 2. **Overview**: Purpose and use cases
 3. **Workflow**: Step-by-step process
 4. **Patterns**: Technical implementation patterns
@@ -284,9 +436,9 @@ All agents are markdown files with clear section structure:
 
 Edit any `.md` file to customize behavior, add patterns, or adjust workflows.
 
-### Adding New Agents
+### Adding New Extensions
 
-Create a new `.md` file following the template:
+**Agent** — Create a new `.md` file in `agents/`:
 
 ```markdown
 ---
@@ -300,6 +452,33 @@ model: sonnet
 # Your Agent Name
 
 [Agent instructions here...]
+```
+
+**Skill** — Create a new `.md` file in `skills/`:
+
+```markdown
+---
+name: your-skill-name
+description: |
+  Expert consultant for...
+model: sonnet
+---
+
+# Your Skill Name
+
+[Skill instructions here...]
+```
+
+**Command** — Create a new `.md` file in `commands/`:
+
+```markdown
+---
+description: Short description of the command
+argument-hint: [optional-args]
+allowed-tools: Bash(git:*), Read, Glob
+---
+
+[Command instructions using $ARGUMENTS for user input...]
 ```
 
 ## Troubleshooting
@@ -325,7 +504,21 @@ model: sonnet
 
 **Solution**: Add the required tool to the `tools` field in YAML frontmatter.
 
+### Command Not Found
+
+**Issue**: Slash command doesn't appear or doesn't work.
+
+**Solution**: Ensure the `.md` file is in the `commands/` directory (project-level or user-level) and has a valid `description` in the frontmatter.
+
 ## Version History
+
+- **v3.0 (2025-02)**: Added skills, commands, and new agents
+  - Added `skills/` directory with expert consultants (java-quarkus-expert, react-mf-expert, react-testing-expert)
+  - Added `commands/` directory with 11 workflow slash commands
+  - Added `adr-compliance-reviewer` agent
+  - Added `tech-design` agent
+  - Renamed `react-mf-agent` to `react-mf-scaffolder` (consulting moved to react-mf-expert skill)
+  - Renamed `java-quarkus-agent` to `java-quarkus-scaffolder` (consulting moved to java-quarkus-expert skill)
 
 - **v2.0 (2025-01-17)**: Split gap-analysis into two focused agents
   - gap-analysis: Phases 0-0.5 (analysis and review)
@@ -342,13 +535,13 @@ model: sonnet
 
 ## Contributing
 
-When adding or modifying agents:
+When adding or modifying extensions:
 
 1. Follow YAML frontmatter structure
-2. Include proactive trigger language
-3. Specify explicit tool list
-4. Keep agents focused (single responsibility)
-5. Add cross-references to related agents
+2. Include proactive trigger language (agents)
+3. Specify explicit tool list (agents)
+4. Keep extensions focused (single responsibility)
+5. Add cross-references to related agents/skills
 6. Document clear activation scenarios
 7. Test automatic invocation
 
@@ -358,4 +551,4 @@ When adding or modifying agents:
 
 ## Support
 
-For issues or questions about these agents, please [create an issue](#) or contact the maintainers.
+For issues or questions about these extensions, please [create an issue](#) or contact the maintainers.
