@@ -1,7 +1,7 @@
 ---
 name: jira-story-creator
 description: |
-  PROACTIVELY use this agent when the user has approved schema documentation or gap analysis findings and wants to create Jira epics and stories. MUST BE USED when the user requests conversion of schemas to Jira stories, has approved gap analysis findings for Jira creation, or needs to generate implementation task tracking. This agent converts approved schema documentation and gap findings (from gap-analysis agent OR direct schema input) into well-structured Jira epics and stories with comprehensive descriptions, acceptance criteria, dependency linking (Blocks relationships), and constraint documentation (foreign keys, transactions). Can work independently with direct schema files OR as a follow-up to the gap-analysis agent.
+  PROACTIVELY use this agent when the user has approved schema documentation or gap analysis findings and wants to create Jira epics and stories. MUST BE USED when the user requests conversion of schemas to Jira stories, has approved gap analysis findings for Jira creation, or needs to generate implementation task tracking. This agent converts approved schema documentation and gap findings (from gap-analysis agent OR direct schema input) into well-structured Jira issues (Initiative → Epic → Story → Sub-task) with comprehensive descriptions, acceptance criteria, dependency linking (Blocks relationships), and constraint documentation (foreign keys, transactions). Can work independently with direct schema files OR as a follow-up to the gap-analysis agent.
 tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, TodoWrite
 model: sonnet
 ---
@@ -9,8 +9,8 @@ model: sonnet
 # Jira Story Creator Agent
 ## Converting Schema Documentation and Gap Findings to Jira Epics and Stories
 
-**Document Version**: 2.0
-**Last Updated**: 2025-01-17
+**Document Version**: 3.0
+**Last Updated**: 2026-02-25
 **Target Audience**: AI Agents (Claude, etc.)
 **Primary Use Case**: AWS Serverless Applications (Lambda, DynamoDB, AppSync, React)
 
@@ -19,44 +19,90 @@ model: sonnet
 ## 📋 Overview
 
 ### Purpose
-This agent converts schema documentation and approved gap analysis findings into well-structured Jira epics and stories with:
+This agent converts schema documentation and approved gap analysis findings into well-structured Jira issues across the full hierarchy (Initiative → Epic → Story → Sub-task) with:
 1. **Detailed story descriptions** with technical context and acceptance criteria
 2. **Epic organization** grouping stories by implementation layers or feature areas
-3. **Dependency management** using "Blocks" relationships to show critical path
-4. **Constraint documentation** including foreign keys, transactions, and validation rules
-5. **Iterative refinement** handling user feedback and corrections
+3. **Sub-task breakdown** with layer prefixes ([SVC], [BFF], [FE], [LIB], [INFRA], [NFC])
+4. **Dependency management** using "Blocks" relationships to show critical path
+5. **Initiative linking** — epics are parented under an existing Jira Initiative
+6. **Constraint documentation** including foreign keys, transactions, and validation rules
+7. **Iterative refinement** handling user feedback and corrections
 
 ### When to Use This Agent
+- User has an approved gap report and wants to create Jira stories (primary path)
 - User has approved gap analysis findings and wants to create Jira stories
 - User provides JSON schemas and wants implementation stories directly (skip gap analysis)
 - User has scenario/example documentation that needs to be converted to tasks
 - User needs a multi-phase implementation plan tracked in Jira
 
+### Parameters
+
+Parse the user's prompt for these parameters:
+
+| Parameter | Required | Default | Example | Purpose |
+|-----------|----------|---------|---------|---------|
+| `--input=PATH` | Yes | — | `./gap-report.md` | Gap report or schema file to convert |
+| `--project=KEY` | Yes | — | `PARTS` | Jira project key |
+| `--initiative=KEY` | Yes | — | `PARTS-100` | Existing Jira initiative key — new epic(s) will be parented here |
+| `--epic-strategy=MODE` | No | `single` | `single` or `feature-grouped` | `single` = one epic for all stories; `feature-grouped` = multiple epics by feature area |
+| `--dry-run` | No | false | flag | Generate JSON files to `/tmp/jira-stories/` without POSTing to Jira. User can review and approve before creating. |
+
+**If any required parameter is missing, ask the user before proceeding.**
+
+### Jira Issue Hierarchy
+
+```
+Initiative (already exists — provided via --initiative)
+  └── Epic (created by this agent — parented under Initiative)
+        └── Story (created by this agent — parented under Epic)
+              └── Sub-task (created by this agent — parented under Story)
+```
+
+- **Initiative**: Pre-existing. The agent links to it, never creates it.
+- **Epic**: Created per `--epic-strategy`. Contains overview, story index, dependency graph.
+- **Story**: One per feature/capability. Contains acceptance criteria, cross-team deps.
+- **Sub-task**: One per layer ([SVC], [BFF], [FE], [LIB], [INFRA], [NFC]). Contains technical implementation details.
+
 ### Expected Inputs
-1. **Approved Story List** from gap-analysis agent OR direct inputs:
+1. **Gap Report File** (primary path — from `/feature-gap-analysis` pipeline):
+   - Markdown file with Proposed Story Index, per-feature gaps, subtasks with layer prefixes, dependency graph, and cross-team dependencies
+   - When a gap report is provided, **skip Phase 1 schema scanning** — the analysis is already done
+2. **OR** direct inputs (legacy path):
    - **Schema Files**: JSON or GraphQL schema definitions (e.g., `api-schema.json`, `schema.graphql`)
    - **Scenario Documentation**: Markdown files with use case examples
    - **Code Repositories** (optional): For verifying existing patterns
-2. **User Preferences**: Story structure, priority levels, epic organization
-3. **Jira Configuration**: Project key, base URL, credentials via environment variables
+3. **User Preferences**: Story structure, priority levels, epic organization
+4. **Jira Configuration**: Project key via `--project`, credentials via environment variables (`$JIRA_USER_EMAIL`, `$JIRA_API_TOKEN`, `$JIRA_BASE_URL`)
 
 ### Expected Outputs
-1. **Jira Epics**: High-level groupings with comprehensive descriptions
-2. **Jira Stories**: Detailed implementation tasks with acceptance criteria
-3. **Dependency Links**: "Blocks" relationships showing critical path
-4. **Updated Documentation**: Epic descriptions referencing all child stories
+1. **Jira Epic(s)**: Parented under the `--initiative`, with overview descriptions listing all child stories
+2. **Jira Stories**: Detailed implementation tasks with acceptance criteria, parented under Epic
+3. **Jira Sub-tasks**: Layer-specific implementation tasks, parented under their Story
+4. **Dependency Links**: "Blocks" relationships showing critical path between Stories
+5. **Updated Documentation**: Epic descriptions referencing all child stories
+6. **Dry-run artifacts** (if `--dry-run`): JSON files in `/tmp/jira-stories/` for review before creation
 
 ---
 
-## 🔄 Workflow (Phases 1-5)
+## 🔄 Workflow (Phases 0-5)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ INPUT: Approved story list OR direct schema files              │
+│ INPUT: Parameters (--input, --project, --initiative, etc.)     │
 └──────────────────────┬──────────────────────────────────────────┘
                        ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ Phase 1: Schema Analysis & Story Planning                      │
+│ Phase 0: Parameter Parsing & Input Loading                     │
+│ • Parse required params (--input, --project, --initiative)      │
+│ • Ask user for any missing required params                      │
+│ • Read --input file (gap report or schema)                      │
+│ • If gap report → extract story index, skip Phase 1             │
+│ • If schema → proceed to Phase 1                                │
+│ • If --dry-run → create /tmp/jira-stories/ output dir           │
+└─────────────────────┬───────────────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ Phase 1: Schema Analysis & Story Planning (SKIP if gap report) │
 │ • Read schema files                                             │
 │ • Identify entities, fields, operations                         │
 │ • Group by implementation layers (data, service, API, UI)       │
@@ -64,11 +110,12 @@ This agent converts schema documentation and approved gap analysis findings into
 └─────────────────────┬───────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ Phase 2: Initial Story Creation                                │
-│ • Create epics for logical groupings                            │
-│ • Generate stories with descriptions & acceptance criteria      │
-│ • Link stories to epics                                         │
-│ • Create dependency relationships                               │
+│ Phase 2: Jira Issue Creation                                   │
+│ • Create epic(s) under --initiative (per --epic-strategy)       │
+│ • Create stories under epic(s) with ADF descriptions + ACs     │
+│ • Create sub-tasks under each story (one per layer prefix)      │
+│ • Create "Blocks" dependency links between stories              │
+│ • If --dry-run → write JSON to /tmp/jira-stories/ and stop      │
 └─────────────────────┬───────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -99,7 +146,101 @@ This agent converts schema documentation and approved gap analysis findings into
 
 ---
 
+## 🚀 Phase 0: Parameter Parsing & Input Loading
+
+### Objective
+Parse all parameters, validate required inputs, load the input file, and determine which workflow path to follow.
+
+### Activities
+
+#### 0.1 Parse Parameters
+
+Extract from the user's prompt:
+```
+--input=PATH          (required) Gap report or schema file
+--project=KEY         (required) Jira project key (e.g., PARTS)
+--initiative=KEY      (required) Existing Jira initiative to parent epics under
+--epic-strategy=MODE  (optional, default: single) single | feature-grouped
+--dry-run             (optional, default: false) Generate JSON without POSTing
+```
+
+**If any required parameter is missing, use AskUserQuestion to ask for it.**
+
+#### 0.2 Validate Jira Connectivity
+
+```bash
+# Verify env vars and connectivity
+bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+  curl -s -u "$EMAIL:$TOKEN" \
+  "https://fullbay.atlassian.net/rest/api/3/myself" | jq ".displayName"'
+```
+
+#### 0.3 Validate Initiative Exists
+
+```bash
+# Verify the initiative key is valid
+bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+  curl -s -u "$EMAIL:$TOKEN" \
+  "https://fullbay.atlassian.net/rest/api/3/issue/INITIATIVE_KEY?fields=summary,issuetype" | \
+  jq "{key: .key, summary: .fields.summary, type: .fields.issuetype.name}"'
+```
+
+If the issue doesn't exist or isn't an Initiative type, ask the user.
+
+#### 0.4 Load Input File and Determine Path
+
+Read the `--input` file. Detect which path to follow:
+
+**Gap Report Detection** — if the file contains ANY of these markers, treat as gap report:
+- `## Proposed Story Index`
+- `## Gap Report by Feature`
+- `**Proposed stories:**`
+- `#### Proposed Stories`
+
+**If gap report detected:**
+1. Extract the Proposed Story Index table
+2. Extract per-feature story details (ACs, subtasks, blocks, cross-team deps)
+3. Extract the dependency graph
+4. Extract cross-team dependency summary
+5. **SKIP Phase 1** — proceed directly to Phase 2
+
+**If NOT a gap report:**
+- Treat as schema/scenario file
+- Proceed to Phase 1 as normal
+
+#### 0.5 Design Spec Fallback (optional enrichment)
+
+If the gap report subtask lines do NOT contain enriched details (no
+indented **Figma:**/**Build:**/**Extend:** lines under subtasks), AND a
+`design-specs/` directory exists alongside the gap report input file:
+
+1. List subdirectories in `design-specs/`
+2. For each feature subdirectory, read `index.json` to get:
+   - `file_key`, `file_name` — needed for Figma URL construction
+   - Frame list with `name`, `id` (node-id), and `spec_file`
+3. Construct Figma URLs: `https://www.figma.com/design/{file_key}/{file_name}?node-id={id with ':' replaced by '-'}`
+4. Optionally read frame JSON files for component names and design values
+5. Inject the constructed Figma URLs and component details into `[FE]` subtask descriptions during ADF construction
+
+This is a safety net — if the gap report was generated before the enriched
+pipeline update, the agent can still pull design details directly from the
+design-specs directory.
+
+#### 0.6 Dry-Run Setup (if --dry-run)
+
+```bash
+mkdir -p /tmp/jira-stories
+echo "Dry-run mode: JSON files will be written to /tmp/jira-stories/"
+```
+
+In dry-run mode, the agent writes all JSON payloads to files instead of POSTing to Jira. The user can review and approve before running without `--dry-run`.
+
+---
+
 ## 📖 Phase 1: Schema Analysis & Story Planning
+
+> **SKIP THIS PHASE** if the `--input` file is a gap report (detected in Phase 0.4).
+> The gap report already contains the story breakdown, subtasks, dependencies, and ACs.
 
 ### Objective
 Understand the schema structure, identify all entities and operations, and plan the story breakdown before creating any Jira issues.
@@ -189,18 +330,45 @@ Create phases based on dependency order:
 
 ---
 
-## 📝 Phase 2: Initial Story Creation
+## 📝 Phase 2: Jira Issue Creation
 
 ### Objective
-Create all Jira epics and stories with proper structure, descriptions, acceptance criteria, and linking.
+Create the full Jira issue hierarchy: Epic(s) under Initiative → Stories under Epic → Sub-tasks under Stories → Dependency links between Stories.
 
-### Story Structure Template
+### Creation Order (MUST follow this sequence)
 
+```
+1. Create Epic(s) → parent under --initiative
+2. Create Stories → parent under Epic
+3. Create Sub-tasks → parent under their Story
+4. Create Dependency Links → "Blocks" between Stories
+5. Update Epic descriptions → add Story key references
+```
+
+Each step depends on keys returned by the previous step. Do NOT parallelize across steps.
+
+### Issue Type Templates
+
+#### Epic Template
 ```json
 {
   "fields": {
-    "project": {"key": "PROJECT"},
-    "summary": "Brief action-oriented title",
+    "project": {"key": "PROJECT_KEY"},
+    "summary": "Epic title",
+    "description": {"type": "doc", "version": 1, "content": [...]},
+    "issuetype": {"name": "Epic"},
+    "parent": {"key": "INITIATIVE_KEY"},
+    "priority": {"id": "2"}
+  }
+}
+```
+
+#### Story Template
+```json
+{
+  "fields": {
+    "project": {"key": "PROJECT_KEY"},
+    "summary": "{Feature Code}: User-visible behavior title",
     "description": {
       "type": "doc",
       "version": 1,
@@ -242,12 +410,56 @@ Create all Jira epics and stories with proper structure, descriptions, acceptanc
       ]
     },
     "issuetype": {"name": "Story"},
+    "parent": {"key": "EPIC_KEY"},
     "priority": {"id": "3"}
   }
 }
 ```
 
+#### Sub-task Template
+```json
+{
+  "fields": {
+    "project": {"key": "PROJECT_KEY"},
+    "summary": "[SVC] Technical description of service-layer work",
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {"type": "text", "text": "Implementation details for this layer..."}
+          ]
+        }
+      ]
+    },
+    "issuetype": {"name": "Sub-task"},
+    "parent": {"key": "STORY_KEY"},
+    "priority": {"id": "3"}
+  }
+}
+```
+
+**Layer prefix conventions for sub-task summaries:**
+| Prefix | Layer | Typical Repos |
+|--------|-------|---------------|
+| `[LIB]` | Shared library (entities, enums) | prt-commons-lib |
+| `[SVC]` | Backend service (business logic, persistence) | prt-parts-svc, prt-purchase-orders-svc |
+| `[BFF]` | AppSync/resolver (GraphQL schema, resolvers) | prt-parts-fun, prt-main-aps |
+| `[FE]` | Frontend (React components, pages) | prt-main-uix |
+| `[INFRA]` | Infrastructure (DynamoDB tables, Terraform) | prt-main-aps |
+| `[NFC]` | Non-functional (tests, docs, observability) | all repos |
+
 ### Activities
+
+#### 2.0 Create Epic(s) Under Initiative
+
+**Single epic strategy** (`--epic-strategy=single`):
+Create one epic that groups all stories. Parent it under the initiative.
+
+**Feature-grouped strategy** (`--epic-strategy=feature-grouped`):
+Group related features into 2-4 epics (e.g., "Part Record + PO Core Fields", "Obligations + Dashboard", "Returns + Write-offs", "WO Actions + Cross-team").
 
 #### 2.1 Create Epics First
 
@@ -285,59 +497,152 @@ Create all Jira epics and stories with proper structure, descriptions, acceptanc
 - Pattern 2: Description
 ```
 
-#### 2.2 Create Stories with Full Context
+#### 2.2 Create Stories Under Epic
+
+For each story from the gap report's Proposed Story Index:
+
+1. Build the JSON payload using the Story Template
+2. Set `"parent": {"key": "EPIC_KEY"}` to the epic created in 2.1
+3. POST to Jira (or write to `/tmp/jira-stories/story-NN.json` if dry-run)
+4. Record the returned Story key (e.g., `PARTS-201`) — needed for sub-tasks and dependency links
+
+**Story Summary Convention (from gap report):**
+```
+{Feature Code}: {User-visible behavior}
+```
+The story prefix (e.g., `CORE:`, `PRICE:`, `INV:`) comes from the gap report's story titles — parse it dynamically at runtime.
+Example: `CORE: Add Has Core toggle and Core Charge to Part Record` or `PRICE: Add matrix pricing to Part Catalog`
 
 **Story Components:**
-1. **Summary**: Action-oriented, 50-80 chars
-   - ✅ "Create EntityDao with DynamoDB Enhanced Client annotations"
-   - ✅ "POST /entities endpoint with validation and error handling"
-   - ❌ "Entity DAO" (too vague)
-   - ❌ "Implement the data access object class for entity management" (too long)
+1. **Summary**: From gap report story title, 50-80 chars
+2. **Description**: Build from gap report's per-feature sections:
+   - What exists (from "What Exists" section)
+   - Gaps identified (from "Gaps" section)
+   - Cross-team dependencies (if any)
+3. **Acceptance Criteria**: From gap report's AC list for the story (use orderedList in ADF)
+4. **Blocks info**: Note in description which stories this blocks (from gap report)
+5. **Cross-team**: Note in description which external teams are needed
 
-2. **Description**: 3-5 paragraphs
-   - Paragraph 1: What needs to be done
-   - Paragraph 2: Technical context (patterns, existing code)
-   - Paragraph 3: Scenario reference (link to examples)
+#### 2.3 Create Sub-tasks Under Each Story
 
-3. **Acceptance Criteria**: 5-12 items
-   - Specific, testable outcomes
-   - Include error cases
-   - Mention test coverage requirements
-   - Reference documentation needs
+For each subtask listed under a story in the gap report:
 
-4. **Code Examples** (optional but helpful):
-   ```
-   {
-     "type": "codeBlock",
-     "attrs": {"language": "java"},
-     "content": [{"type": "text", "text": "Example code..."}]
-   }
-   ```
+1. Build JSON payload using the Sub-task Template
+2. Set `"parent": {"key": "STORY_KEY"}` to the story created in 2.2
+3. Use the layer prefix in the summary: `[SVC] Implementation details...`
+4. POST to Jira (or write to `/tmp/jira-stories/subtask-NN-LL.json` if dry-run)
 
-#### 2.3 Link Stories to Epics
+**Sub-task ordering — create in dependency order:**
+1. `[LIB]` — shared entities/enums (no dependencies)
+2. `[SVC]` — service logic + persistence (depends on LIB)
+3. `[BFF]` — GraphQL schema + resolvers (depends on SVC)
+4. `[FE]` — UI components + pages (depends on BFF)
+5. `[INFRA]` — cloud resources (DynamoDB, SQS, OpenSearch, EventBridge, Lambda)
+6. `[NFC]` — cross-cutting work only (observability, CI/CD, docs, cross-layer refactors, service wiring)
 
-```bash
-# After creating story, link to epic
-curl -u "$EMAIL:$TOKEN" -X PUT -H "Content-Type: application/json" \
-  --data '{"fields":{"parent":{"key":"EPIC-123"}}}' \
-  "https://$JIRA_BASE_URL/rest/api/3/issue/STORY-456"
+**Testing is NOT a standalone subtask.** Each layer subtask ([LIB], [SVC], [BFF], [FE], [INFRA]) owns its own tests via **Test:** or **Testing Strategy:** detail lines. `[NFC]` is reserved for cross-cutting work that spans layers.
+
+**Sub-task descriptions — extract from gap report:**
+
+Each subtask in the enriched gap report includes indented detail lines
+(Figma links, Forge components, schema refs, testing strategy). Parse ALL
+indented lines under each subtask and include them in the sub-task's
+ADF description. Structure:
+
+```
+h3: Implementation Details
+  - Each indented line becomes a bullet
+  - Figma URLs become clickable links (use ADF link marks with href)
+  - File paths use code formatting (use ADF code marks)
+  - Bold labels (**Figma:**, **Build:**, **Forge:**, **Tokens:**, **Schema:**, **Existing:**, **Refactor:**) become strong marks
+
+h3: Testing Strategy  (for [SVC] subtasks)
+  - Separate "Unit:" and "Integration:" sub-bullets
+  - Patterns: reference existing test files
+
+h3: Tests  (for [LIB], [BFF], [FE], [INFRA] subtasks)
+  - Test scenarios specific to that layer
+  - Patterns: reference existing test files
+
+(No test section for [NFC] — cross-cutting by nature)
 ```
 
-#### 2.4 Create Dependency Links
+**Parsing rules:**
+1. After a subtask line like `- \`[FE]\` Summary text`, collect all following lines indented deeper (starting with `  - **`)
+2. Split into three groups:
+   - **Implementation lines:** `**Figma:**`, `**Build:**`, `**Forge:**`, `**Tokens:**`, `**Schema:**`, `**Existing:**`, `**Extend:**`, `**Path:**`, `**Add:**`, `**Design:**`, `**Reuse:**`, `**Refactor:**`, `**Resource:**`, `**Publish:**`, `**Consume:**`
+   - **Test lines:** `**Test:**`, `**Testing Strategy:**`, `**Patterns:**`
+   - **NFC lines:** `**Scope:**`, `**Touches:**`, `**Detail:**`
+3. Implementation lines → ADF heading "Implementation Details" + bullet list
+4. Test lines → ADF heading "Testing Strategy" (for [SVC]) or "Tests" (other layers) + bullet list
+5. NFC lines → ADF heading "Scope" + bullet list (for [NFC] subtasks only)
+6. Markdown links `[text](url)` → ADF `link` mark with `href`
+7. Inline code `` `path/to/file` `` → ADF `code` mark
+8. Bold `**Label:**` → ADF `strong` mark
+9. If no indented detail lines exist for a subtask, fall back to the basic description (repos affected, files to modify)
+
+**Cross-BC stories:**
+
+If a story in the gap report has `- **Labels:** cross-bc`, add the `cross-bc` label to the Jira issue:
+```json
+{"fields": {"labels": ["cross-bc"]}}
+```
+
+Cross-BC stories use event-driven integration (EventBridge / SQS), not direct API calls.
+The gap report will include `**Publish:**` and `**Consume:**` detail lines on `[SVC]` subtasks
+describing the event contract. These become implementation details in ADF like any other line.
+The `**Cross-team:**` line on the story describes what the other BC team needs to subscribe to.
+
+**No UI component exports across BCs.** Each micro-frontend owns its own UI. If the gap report
+describes a cross-BC UI interaction, the Cross-Team Dependencies section should describe the
+API contract (endpoint or event) the other team calls — NOT a React component export. Example:
+"{Other Team} builds their form in their UI; calls `POST /{domain}-{action}`".
+
+**Example sub-task summaries for a single story (in dependency order):**
+```
+[LIB]  Add {new fields} to {Entity}Dao
+[SVC]  Add {new fields} to {Entity} CRUD endpoints with validation
+[BFF]  Add {new fields} to {Entity} GraphQL type and mutations
+[FE]   {UI component description} on {page name} (responsive)
+[NFC]  CloudWatch dashboard + alarms for {domain} validation errors (if needed)
+```
+
+#### 2.4 Create Dependency Links Between Stories
+
+After ALL stories are created (you need all Story keys first):
 
 ```json
 {
   "type": {"name": "Blocks"},
-  "inwardIssue": {"key": "STORY-101"},
-  "outwardIssue": {"key": "STORY-102"}
+  "inwardIssue": {"key": "BLOCKER_STORY_KEY"},
+  "outwardIssue": {"key": "BLOCKED_STORY_KEY"}
 }
 ```
 
+**CRITICAL — Link direction is counterintuitive on Jira Cloud:**
+To make **X blocks Y** (Y "Is Blocked by" X), use:
+- `"inwardIssue": {"key": "X"}` — the blocker
+- `"outwardIssue": {"key": "Y"}` — the blocked issue
+
+This has been empirically verified on fullbay.atlassian.net.
+
 **Dependency Patterns:**
 - Foundation stories block everything else
-- CRUD operations block advanced operations
-- Backend blocks frontend
+- Part Record (C) blocks PO Lines (D) and Obligations (J)
+- Obligations (J) blocks Dashboard (I) and downstream features
 - Implementation blocks testing/documentation
+
+#### 2.5 Update Epic Description with Story Keys
+
+After all stories are created, update the epic description to include actual Jira keys:
+
+```bash
+# Fetch current epic description, update with story keys, PUT back
+bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+  curl -s -u "$EMAIL:$TOKEN" -X PUT -H "Content-Type: application/json" \
+  --data @/tmp/epic-update.json \
+  "https://fullbay.atlassian.net/rest/api/3/issue/EPIC_KEY"'
+```
 
 ### Common Patterns
 
@@ -840,7 +1145,72 @@ When user requests naming change:
 
 ## 🛠️ Technical Patterns Library
 
-### Pattern 1: Jira Story Creation via API
+### Pattern 0: Gap Report → Story Key Mapping
+
+When the input is a gap report, maintain a mapping file during creation:
+
+```bash
+# Create mapping file to track gap report story # → Jira key
+cat > /tmp/jira-stories/story-mapping.json << 'EOF'
+{
+  "initiative": "PARTS-XXX",
+  "epic": null,
+  "stories": {
+    "1": {"title": "{Feature Code}: {story 1 title}...", "key": null, "subtasks": []},
+    "2": {"title": "{Feature Code}: {story 2 title}...", "key": null, "subtasks": []},
+    ...
+  },
+  "dependencies": [
+    {"blocker": "1", "blocked": "2"},
+    {"blocker": "1", "blocked": "7"},
+    ...
+  ]
+}
+EOF
+
+# After each creation, update the mapping:
+# jq '.stories["1"].key = "PARTS-201"' /tmp/jira-stories/story-mapping.json > tmp && mv tmp /tmp/jira-stories/story-mapping.json
+```
+
+This mapping is used in Phase 2.4 to create dependency links with actual Jira keys.
+
+### Pattern 1: Jira Issue Creation via API (all issue types)
+
+```bash
+# Setup (use environment variables)
+EMAIL="$JIRA_USER_EMAIL"
+TOKEN="$JIRA_API_TOKEN"
+BASE="fullbay.atlassian.net"
+
+# Create any issue type (Epic, Story, Sub-task)
+# The "parent" field handles the hierarchy:
+#   Epic parent = Initiative key
+#   Story parent = Epic key
+#   Sub-task parent = Story key
+
+cat > /tmp/jira-stories/issue.json << 'EOF'
+{
+  "fields": {
+    "project": {"key": "PARTS"},
+    "summary": "Issue title",
+    "description": {...},
+    "issuetype": {"name": "Story"},
+    "parent": {"key": "PARENT_KEY"},
+    "priority": {"id": "3"}
+  }
+}
+EOF
+
+# Create issue
+bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+  curl -s -u "$EMAIL:$TOKEN" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  --data @/tmp/jira-stories/issue.json \
+  "https://fullbay.atlassian.net/rest/api/3/issue"' | jq '.key'
+```
+
+### Pattern 1a: Legacy Story Creation (without parent hierarchy)
 
 ```bash
 # Setup (use environment variables)
@@ -882,7 +1252,123 @@ curl -s -u "$EMAIL:$TOKEN" \
   "https://$BASE/rest/api/3/issue/STORY-123"
 ```
 
+### Pattern 2a: Create Epic Under Initiative
+
+```bash
+# Create epic parented under an existing initiative
+cat > /tmp/jira-stories/epic.json << 'EOF'
+{
+  "fields": {
+    "project": {"key": "PARTS"},
+    "summary": "{Epic Title from gap report}",
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{"type": "text", "text": "{Summary of features from gap report executive summary}"}]
+        },
+        {
+          "type": "heading",
+          "attrs": {"level": 2},
+          "content": [{"type": "text", "text": "Stories"}]
+        },
+        {
+          "type": "paragraph",
+          "content": [{"type": "text", "text": "Story keys will be added after creation."}]
+        }
+      ]
+    },
+    "issuetype": {"name": "Epic"},
+    "parent": {"key": "PARTS-XXX"},
+    "priority": {"id": "2"}
+  }
+}
+EOF
+
+bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+  curl -s -u "$EMAIL:$TOKEN" -X POST -H "Content-Type: application/json" \
+  --data @/tmp/jira-stories/epic.json \
+  "https://fullbay.atlassian.net/rest/api/3/issue"' | jq '.key'
+# Output: PARTS-200 (save this — all stories will parent here)
+```
+
+### Pattern 2b: Create Sub-task Under Story
+
+```bash
+# Create a sub-task parented under a story
+cat > /tmp/jira-stories/subtask.json << 'EOF'
+{
+  "fields": {
+    "project": {"key": "PARTS"},
+    "summary": "[SVC] Add hasCore/coreCharge to Parts Catalog CRUD endpoints with validation",
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{"type": "text", "text": "Add hasCore (Boolean) and coreCharge (Long) to create/update catalog endpoints in prt-parts-svc. Validate coreCharge >= 0 when hasCore=true. Update OpenAPI spec."}]
+        }
+      ]
+    },
+    "issuetype": {"name": "Sub-task"},
+    "parent": {"key": "PARTS-201"},
+    "priority": {"id": "3"}
+  }
+}
+EOF
+
+bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+  curl -s -u "$EMAIL:$TOKEN" -X POST -H "Content-Type: application/json" \
+  --data @/tmp/jira-stories/subtask.json \
+  "https://fullbay.atlassian.net/rest/api/3/issue"' | jq '.key'
+# Output: PARTS-202 (sub-task key)
+```
+
+### Pattern 2c: Batch Sub-task Creation Loop
+
+```bash
+# Create multiple sub-tasks for a story from an array
+STORY_KEY="PARTS-201"
+SUBTASKS=(
+  '[LIB] Add hasCore and coreCharge fields to PartsCatalogDao'
+  '[SVC] Add hasCore/coreCharge to Parts Catalog CRUD endpoints with validation'
+  '[BFF] Add hasCore/coreCharge to PartsCatalog GraphQL type and mutations'
+  '[FE] Has Core toggle + Core Charge field on Part Record page (responsive)'
+  '[NFC] Unit, integration, and UI component tests for Part Record core fields'
+)
+
+for i in "${!SUBTASKS[@]}"; do
+  SUMMARY="${SUBTASKS[$i]}"
+  cat > /tmp/jira-stories/subtask-${STORY_KEY}-${i}.json << EOF
+{
+  "fields": {
+    "project": {"key": "PARTS"},
+    "summary": "${SUMMARY}",
+    "description": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "${SUMMARY}"}]}]},
+    "issuetype": {"name": "Sub-task"},
+    "parent": {"key": "${STORY_KEY}"},
+    "priority": {"id": "3"}
+  }
+}
+EOF
+  bash -c 'EMAIL="$JIRA_USER_EMAIL"; TOKEN="$JIRA_API_TOKEN"; \
+    curl -s -u "$EMAIL:$TOKEN" -X POST -H "Content-Type: application/json" \
+    --data @/tmp/jira-stories/subtask-'"${STORY_KEY}-${i}"'.json \
+    "https://fullbay.atlassian.net/rest/api/3/issue"' | jq -r '.key'
+done
+```
+
 ### Pattern 3: Dependency Links (Blocks)
+
+**CRITICAL — Link direction is counterintuitive on Jira Cloud (fullbay.atlassian.net):**
+To make **X blocks Y** (Y "Is Blocked by" X):
+- `"inwardIssue"` = X (the blocker)
+- `"outwardIssue"` = Y (the blocked issue)
+
+This is the **opposite** of what the Jira docs suggest. Verified empirically.
 
 ```json
 {
@@ -1936,6 +2422,18 @@ Expect 2-3 rounds of refinement after initial story creation:
 - New technology patterns (e.g., new database, new framework)
 
 ### Version History
+
+- **v3.0 (2026-02-25)**: Major update — Full Jira hierarchy support + gap report input
+  - Added Phase 0: Parameter Parsing & Input Loading with `--input`, `--project`, `--initiative`, `--epic-strategy`, `--dry-run`
+  - Added Initiative → Epic → Story → Sub-task hierarchy (full Jira hierarchy)
+  - Added Sub-task creation patterns (Pattern 2b, 2c) with layer prefixes ([SVC], [BFF], [FE], [LIB], [INFRA], [NFC])
+  - Added Initiative linking pattern (Pattern 2a) — epics parent under existing initiative
+  - Added gap report auto-detection — skips Phase 1 when input is a gap report
+  - Added dry-run mode — generates JSON to /tmp/jira-stories/ without POSTing
+  - Added story key mapping file for dependency resolution
+  - Added critical note on Blocks link direction (empirically verified on fullbay.atlassian.net)
+  - Updated base URL references to fullbay.atlassian.net
+  - Updated Phase 2 workflow to show creation order and sequencing rules
 
 - **v2.0 (2025-01-14)**: Major update - Gap Analysis Agent capabilities added
   - Added Phase 0: Multi-Dimensional Gap Analysis

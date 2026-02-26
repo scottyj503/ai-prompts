@@ -12,6 +12,23 @@ The extensions are organized into three categories:
 - **Skills** — Expert consultants invoked inline for code review, architecture guidance, and troubleshooting
 - **Commands** — Slash commands (`/command-name`) for common workflow tasks like fetching Jira issues, creating PRs, and reviewing code
 
+## Feature Analysis Pipeline
+
+A 5-step pipeline that takes a Confluence spec page and turns it into Jira stories with full gap analysis:
+
+```
+/extract-critical-path → /extract-feature-designs → /feature-gap-analysis → /industry-standards-review → /create-jira-stories
+```
+
+**See [PIPELINE-GUIDE.md](PIPELINE-GUIDE.md) for the complete how-to**, including:
+- Setting up the `repos/` directory with code checkouts
+- Writing a `REPO_SUMMARY.md` (critical for accurate gap analysis)
+- Running each step with parameters
+- Reviewing outputs between steps
+- Tips for better results
+
+---
+
 ## Available Agents
 
 ### 1. **gap-analysis**
@@ -165,6 +182,58 @@ Creates comprehensive technical design documentation for AWS serverless applicat
 
 ---
 
+### 9. **qa-testing-agent**
+Guides testers through the complete QA lifecycle — from story intake through test execution, results formatting, and Jira posting.
+
+**Use Cases:**
+- Generating test plans from Jira story acceptance criteria
+- Selecting mobile device test matrices
+- Formatting test results for Jira comments
+- Posting QA results to Jira issues
+- Translation testing verification
+
+**Triggers:** Automatically invoked when you request QA testing guidance, test plan creation, or test results formatting.
+
+**Output:** Structured test plans, formatted test results, and Jira comments.
+
+---
+
+### 10. **routing-agent**
+SDLC orchestration agent that coordinates the complete software development lifecycle — planning, implementation, review, and delivery.
+
+**Use Cases:**
+- Building complete software projects that require multi-phase coordination
+- Dispatching work to language-specific subagents (Python, TypeScript, Java/Quarkus, Terraform, Go, React)
+- Orchestrating functional and code quality reviews with retry loops
+- Handling git commits and PR creation
+
+**Triggers:** Automatically invoked when building complete software projects that require planning, implementation, review, and delivery.
+
+**Subagents:** python-agent, typescript-agent, java-quarkus-agent, terraform-agent, golang-agent, react-agent, functional-reviewer, code-quality-reviewer, adr-compliance-reviewer.
+
+---
+
+### 11. **terraform-agent**
+Generates Terraform infrastructure as code following AWS best practices with proper state management, security, and testing.
+
+**Use Cases:**
+- Creating new Terraform project scaffolding for AWS deployments
+- Generating infrastructure modules and resources
+- Setting up state management, security scanning, and linting
+
+**Triggers:** Automatically invoked when you request Terraform infrastructure generation.
+
+**Stack:**
+- Terraform (latest stable)
+- AWS provider
+- tflint, checkov/tfsec
+- terraform-docs
+- terratest
+
+**External Rules:** Consults `~/.claude/terraform_rules.md` for comprehensive Terraform development guidelines.
+
+---
+
 ## Available Skills
 
 Skills are expert consultants that run inline (not as subagents). They provide guidance, review, and troubleshooting without generating full project scaffolds.
@@ -213,6 +282,16 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/reviewitadr` | Run the adr-compliance-reviewer agent on the current repository |
 | `/java-branch-refactor` | Analyze the git diff for this branch and identify refactoring opportunities (Java/Quarkus) |
 | `/mergeandresolve` | Merge master and resolve conflicts, then verify build/lint/tests pass |
+| `/extract-critical-path <page-id>` | Extract features, ACs, and Figma links from a Confluence spec page (Pipeline Step 1) |
+| `/extract-feature-designs` | Extract Figma design specs per feature from Step 1 output (Pipeline Step 2) |
+| `/feature-gap-analysis --feature-code=CODE` | Compare features + designs against repo code to identify gaps (Pipeline Step 3) |
+| `/industry-standards-review` | Compare gap report against industry standards and best practices (Pipeline Step 4) |
+| `/create-jira-stories --initiative=KEY` | Create Jira epic, stories, subtasks, and dependency links from gap report (Pipeline Step 5) |
+| `/post-jira-comment <issue-key>` | Post a comment to a Jira issue via REST API |
+| `/qa-test-plan` | Generate a QA test plan from story context, branch diff, and PR changes |
+| `/createReview [--omit=N,...] [--approve]` | Post a GitHub PR review with inline comments from a prior `/codereview` run |
+| `/figma-extract <figma-url>` | Extract Figma design specs (frames, components, tokens) for offline analysis |
+| `/getLatestClaudeReleaseNotes [version]` | Fetch the latest Claude Code release notes from GitHub |
 
 ---
 
@@ -270,6 +349,12 @@ Simply describe what you want to accomplish, and Claude will automatically invok
 
 # Triggers adr-compliance-reviewer agent
 "Check this repo for ADR compliance"
+
+# Triggers qa-testing-agent
+"Help me test PROJ-456"
+
+# Triggers terraform-agent
+"Generate Terraform for an S3 bucket with CloudFront"
 ```
 
 ### Slash Commands
@@ -410,6 +495,9 @@ export JIRA_BASE_URL="your-company.atlassian.net"
 | "Review my code quality" | code-quality-reviewer | Agent |
 | "Check ADR compliance" | adr-compliance-reviewer | Agent |
 | "Create a technical design doc" | tech-design | Agent |
+| "Help me test this Jira story" | qa-testing-agent | Agent |
+| "Build a complete project" | routing-agent | Agent |
+| "Generate Terraform for this infra" | terraform-agent | Agent |
 | "Review this Java code" | java-quarkus-expert | Skill |
 | "Help with React MF architecture" | react-mf-expert | Skill |
 | "Help me write tests" | react-testing-expert | Skill |
@@ -511,6 +599,14 @@ allowed-tools: Bash(git:*), Read, Glob
 **Solution**: Ensure the `.md` file is in the `commands/` directory (project-level or user-level) and has a valid `description` in the frontmatter.
 
 ## Version History
+
+- **v4.0 (2026-02)**: Pipeline, new agents, and expanded commands
+  - Added `PIPELINE-GUIDE.md` — comprehensive 5-step feature analysis pipeline how-to
+  - Added `qa-testing-agent` for QA lifecycle guidance, test plans, and Jira result posting
+  - Added `routing-agent` for SDLC orchestration across language-specific subagents
+  - Added `terraform-agent` for Terraform IaC generation with AWS best practices
+  - Major rewrite of `jira-story-creator` agent
+  - Added 11 new slash commands: `/extract-critical-path`, `/extract-feature-designs`, `/feature-gap-analysis`, `/industry-standards-review`, `/create-jira-stories`, `/post-jira-comment`, `/qa-test-plan`, `/createReview`, `/figma-extract`, `/getLatestClaudeReleaseNotes`, `/codeReviewUpdate`
 
 - **v3.0 (2025-02)**: Added skills, commands, and new agents
   - Added `skills/` directory with expert consultants (java-quarkus-expert, react-mf-expert, react-testing-expert)
