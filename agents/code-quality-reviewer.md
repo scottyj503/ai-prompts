@@ -29,7 +29,7 @@ description: |
   Direct request for code review, use the code-quality-reviewer agent.
   </commentary>
   </example>
-model: sonnet
+model: opus
 color: blue
 ---
 

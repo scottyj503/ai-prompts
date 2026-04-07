@@ -153,20 +153,79 @@ Analyzes repositories for compliance with accepted Architecture Decision Records
 - Pre-release compliance checks
 - Auditing ADR adherence across a codebase
 
-**ADRs Checked:**
-- ADR-001: Prefixed Base62 Entity Identifiers
-- ADR-002: Backend For Frontend with AppSync
-- ADR-003: React/Vite Frontend
-- ADR-004: Module Federation Micro Frontends
-- ADR-005: Zustand State Management
+**How it works:** Dynamically loads all accepted ADRs and their Implementation Guides from the `architecture-decisions` repository. Discovers ADRs via glob, loads corresponding ImplGuides, and builds a runtime compliance checklist — no hardcoded ADR list.
 
 **Triggers:** Automatically invoked when you request ADR compliance analysis or before major releases.
 
-**Output:** Detailed compliance report with specific `file:line` references for violations.
+**Output:** Detailed compliance report with specific `file:line` references, prohibited pattern traceability, and per-ADR scores.
 
 ---
 
-### 8. **tech-design**
+### 8. **functional-reviewer**
+Verifies that generated code functionally accomplishes what was requested.
+
+**Use Cases:**
+- Checking that implementations match requirements and acceptance criteria
+- Verifying edge case and error path handling
+- Validating integration points and API contracts
+- Confirming completeness — no missing features or unfinished TODOs
+
+**Triggers:** Dispatched by the routing-agent or `/review` command. Receives context via dispatch prompt.
+
+**Output:** Requirements checklist with APPROVED/NEEDS_CHANGES verdict. Only CRITICAL issues block approval.
+
+**Scope boundary:** Does NOT review style, formatting, performance, or security — those belong to other reviewers.
+
+---
+
+### 9. **performance-reviewer**
+Reviews code for performance bottlenecks, inefficient algorithms, and optimization opportunities.
+
+**Use Cases:**
+- Identifying O(n^2) or worse algorithms in hot paths
+- Detecting N+1 queries, missing pagination, queries in loops
+- Flagging unbounded collections, missing resource cleanup, blocking I/O
+- Language-specific patterns (Java Stream misuse, React re-renders, Terraform serial dependencies)
+
+**Triggers:** Dispatched by the routing-agent or `/review` command.
+
+**Output:** Prioritized findings with PASS/FAIL verdict. Includes scalability concerns for 10x/100x growth.
+
+---
+
+### 10. **lambda-performance-reviewer**
+Specialized performance reviewer for Java Quarkus applications running in AWS Lambda.
+
+**Use Cases:**
+- Cold start optimization (init phase weight, extension audit, native image readiness, SnapStart)
+- Memory right-sizing based on live CloudWatch metrics
+- SDK usage audit (v1 vs v2, connection reuse, async clients)
+- X-Ray instrumentation assessment (infra + application + downstream coverage)
+- Live observability via CloudWatch metrics, Logs Insights, and X-Ray traces
+
+**Triggers:** Dispatched when reviewing Lambda-deployed Java services. Accepts optional SSO profile and Lambda ARN for live data.
+
+**Output:** Detailed report with cold start assessment, runtime performance section (when live data available), infrastructure recommendations, and PASS/FAIL verdict.
+
+---
+
+### 11. **security-reviewer**
+Reviews code for security vulnerabilities, OWASP Top 10 issues, and security best practices.
+
+**Use Cases:**
+- OWASP Top 10 analysis (injection, broken auth, XSS, IDOR, etc.)
+- Input validation and sanitization at external boundaries
+- Cryptography audit (weak algorithms, hardcoded keys, missing encryption)
+- Language-specific patterns (Java endpoint auth, React XSS, Terraform IAM/S3/SG)
+- Grep-based anti-pattern scanning (eval, shell=True, innerHTML, 0.0.0.0/0, etc.)
+
+**Triggers:** Dispatched by the routing-agent or `/review` command.
+
+**Output:** Prioritized findings with OWASP/CWE references, attack scenarios, and PASS/FAIL verdict.
+
+---
+
+### 12. **tech-design**
 Creates comprehensive technical design documentation for AWS serverless applications following a Technical Review Checklist.
 
 **Use Cases:**
@@ -182,7 +241,7 @@ Creates comprehensive technical design documentation for AWS serverless applicat
 
 ---
 
-### 9. **qa-testing-agent**
+### 13. **qa-testing-agent**
 Guides testers through the complete QA lifecycle — from story intake through test execution, results formatting, and Jira posting.
 
 **Use Cases:**
@@ -198,7 +257,7 @@ Guides testers through the complete QA lifecycle — from story intake through t
 
 ---
 
-### 10. **routing-agent**
+### 14. **routing-agent**
 SDLC orchestration agent that coordinates the complete software development lifecycle — planning, implementation, review, and delivery.
 
 **Use Cases:**
@@ -209,11 +268,11 @@ SDLC orchestration agent that coordinates the complete software development life
 
 **Triggers:** Automatically invoked when building complete software projects that require planning, implementation, review, and delivery.
 
-**Subagents:** python-agent, typescript-agent, java-quarkus-agent, terraform-agent, golang-agent, react-agent, functional-reviewer, code-quality-reviewer, adr-compliance-reviewer.
+**Subagents:** python-agent, typescript-agent, java-quarkus-agent, terraform-agent, golang-agent, react-agent, functional-reviewer, code-quality-reviewer, performance-reviewer, security-reviewer, adr-compliance-reviewer.
 
 ---
 
-### 11. **terraform-agent**
+### 15. **terraform-agent**
 Generates Terraform infrastructure as code following AWS best practices with proper state management, security, and testing.
 
 **Use Cases:**
@@ -276,6 +335,7 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/get-jira <issue-key>` | Fetch Jira issue details (summary, description, status, priority) |
 | `/getConfluencePage <page-id\|url\|title>` | Fetch and render a Confluence page as markdown (optional `--prompt` for analysis) |
 | `/getPRComments <pr-number>` | Fetch GitHub PR comments and analyze codebase in context (optional `--author` filter) |
+| `/review <pr-number>` | Run five parallel reviewers (functional, quality, performance, security, ADR) on a PR and submit a GitHub review with inline comments |
 | `/codereview <pr-number>` | Pull down a PR and run the code-quality-reviewer agent on it |
 | `/codeReviewUpdate <commit-sha>` | Re-review after changes have been made to a PR |
 | `/create-pr` | Add, commit, push, and create a pull request via GitHub CLI |
@@ -347,6 +407,9 @@ Simply describe what you want to accomplish, and Claude will automatically invok
 # Triggers tech-design agent
 "Create a technical design document for the new notifications feature"
 
+# Triggers security-reviewer agent
+"Check this code for security vulnerabilities"
+
 # Triggers adr-compliance-reviewer agent
 "Check this repo for ADR compliance"
 
@@ -362,6 +425,7 @@ Simply describe what you want to accomplish, and Claude will automatically invok
 ```bash
 /get-jira PROJ-123
 /catchup
+/review 42
 /codereview 42
 /create-pr
 /reviewitadr
@@ -444,6 +508,21 @@ User: "Now analyze gaps against the design"
 -> gap-analysis agent uses design doc as input
 ```
 
+### Full PR Review Pipeline
+
+```
+/review 42
+  -> Checks out PR, fetches diff
+  -> Dispatches 5 reviewers in parallel:
+     functional-reviewer, code-quality-reviewer,
+     performance-reviewer, security-reviewer, adr-compliance-reviewer
+  -> Aggregates and deduplicates findings
+  -> Presents severity-grouped checklist for user approval
+  -> Submits atomic GitHub review with inline comments
+```
+
+---
+
 ### React Development with Review
 
 ```
@@ -493,7 +572,12 @@ export JIRA_BASE_URL="your-company.atlassian.net"
 | "Scaffold a React micro-frontend" | react-mf-scaffolder | Agent |
 | "Scaffold a Quarkus service" | java-quarkus-scaffolder | Agent |
 | "Review my code quality" | code-quality-reviewer | Agent |
+| "Does this code do what was asked?" | functional-reviewer | Agent |
+| "Check for performance issues" | performance-reviewer | Agent |
+| "Review Lambda cold start performance" | lambda-performance-reviewer | Agent |
+| "Check for security vulnerabilities" | security-reviewer | Agent |
 | "Check ADR compliance" | adr-compliance-reviewer | Agent |
+| "Full PR review (all dimensions)" | /review | Command |
 | "Create a technical design doc" | tech-design | Agent |
 | "Help me test this Jira story" | qa-testing-agent | Agent |
 | "Build a complete project" | routing-agent | Agent |
@@ -599,6 +683,16 @@ allowed-tools: Bash(git:*), Read, Glob
 **Solution**: Ensure the `.md` file is in the `commands/` directory (project-level or user-level) and has a valid `description` in the frontmatter.
 
 ## Version History
+
+- **v5.0 (2026-04)**: Review pipeline and specialized reviewers
+  - Added `/review` command — orchestrates 5 parallel reviewers on a PR and submits an atomic GitHub review with inline comments
+  - Added `functional-reviewer` agent — verifies code does what was requested, returns APPROVED/NEEDS_CHANGES
+  - Added `performance-reviewer` agent — algorithmic complexity, I/O, scalability analysis with PASS/FAIL verdict
+  - Added `lambda-performance-reviewer` agent — specialized Java/Quarkus Lambda reviewer with live CloudWatch/X-Ray observability
+  - Added `security-reviewer` agent — OWASP Top 10, input validation, crypto audit with PASS/FAIL verdict
+  - Rewrote `adr-compliance-reviewer` to dynamically load ADRs from the `architecture-decisions` repository instead of hardcoded checks
+  - Changed `code-quality-reviewer` model from sonnet to opus
+  - Fixed broken markdown code fence in `PIPELINE-GUIDE.md`
 
 - **v4.0 (2026-02)**: Pipeline, new agents, and expanded commands
   - Added `PIPELINE-GUIDE.md` — comprehensive 5-step feature analysis pipeline how-to

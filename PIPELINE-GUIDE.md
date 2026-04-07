@@ -125,10 +125,9 @@ the lowest and most authoritative data layer. Include:
 
 **Example dependency map section:**
 
-```markdown
+```
 ## Dependency Map
 
-```
                     ┌──────────────────┐
                     │  my-commons-lib  │  (shared Java library)
                     └──────┬────────┬──┘
@@ -155,7 +154,6 @@ the lowest and most authoritative data layer. Include:
               ┌──────────────────┐
               │  my-frontend-uix │  (React microfrontend)
               └──────────────────┘
-```
 ```
 
 **The more detail you provide, the better the gap analysis will be.** A thorough REPO_SUMMARY typically runs 400–600 lines and takes 30–60 minutes to write — but it pays for itself many times over in scan accuracy. You can also ask Claude to help generate it by pointing it at your repos.
