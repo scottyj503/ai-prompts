@@ -45,7 +45,7 @@ gh pr checkout $ARGUMENTS
 
 Dispatch **five Task calls in a single message** so they run simultaneously:
 
-For each task, provide:
+For each task, specify `model: "opus"` and provide:
 - The PR diff output (from `gh pr diff` in Step 1) for the changed files
 - The list of changed files (paths only)
 
