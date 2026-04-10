@@ -43,11 +43,15 @@ gh pr checkout $ARGUMENTS
 
 ## Step 2: Run Reviews in Parallel
 
-Dispatch **five Task calls in a single message** so they run simultaneously:
+Dispatch **five Agent calls in a single message** so they run simultaneously.
 
-For each task, specify `model: "opus"` and provide:
+**MANDATORY: Every Agent call MUST include `model: "opus"`.** Do not omit this parameter. Do not inherit from the session default. Explicitly set `model: "opus"` on each of the five Agent calls.
+
+Each agent receives:
 - The PR diff output (from `gh pr diff` in Step 1) for the changed files
 - The list of changed files (paths only)
+
+**Do NOT pre-read changed files before dispatching.** Do not read file contents to include in the agent prompts. The agents have Read, Glob, and Grep tools and will fetch exactly what they need. Pre-stuffing file contents into prompts wastes tokens and provides no benefit.
 
 Each agent must focus on **code introduced or modified in this PR**. Do not flag pre-existing issues in unchanged code. However, agents SHOULD flag new code that is **inconsistent with established codebase patterns** — read surrounding code to understand conventions.
 
@@ -61,20 +65,30 @@ Each agent must focus on **code introduced or modified in this PR**. Do not flag
 
 **Verdict rule:** Your verdict must be consistent with your findings. If you report any CRITICAL or HIGH finding, your verdict must be NEEDS_CHANGES (or FAIL for performance). APPROVED/PASS means no CRITICAL or HIGH issues.
 
-**Task A — performance-reviewer subagent:**
+### Task A — performance-reviewer
+- **subagent_type:** `performance-reviewer`
+- **model:** `"opus"`
 - Instruct: "Run your full review workflow on the changed files in this PR. The PR diff and file list are provided below for context, but you should read the full files, surrounding code, and codebase conventions to understand performance patterns. Do NOT run builds or tests — focus on static code analysis only. Do NOT flag pre-existing issues in unchanged code, but DO flag new code that is inconsistent with established codebase performance patterns. After your full analysis, append a structured findings section at the end with each finding on its own block containing these fields: severity (CRITICAL, HIGH, MEDIUM, or LOW), file (relative path), line (line number in the file), and description (what the performance issue is, its estimated impact, and how to fix it). End with your verdict: PASS or FAIL."
 
-**Task B — functional-reviewer subagent:**
+### Task B — functional-reviewer
+- **subagent_type:** `functional-reviewer`
+- **model:** `"opus"`
 - Also provide the PR title and body as "the user's stated requirements / intent"
 - Instruct: "Run your full review workflow on the changed files in this PR. Treat the PR description as the user's requirements. The PR diff and file list are provided below for context, but you should read the full files, surrounding code, and codebase conventions to understand patterns. Do NOT run builds or tests — focus on static code analysis only. Do NOT flag pre-existing issues in unchanged code, but DO flag new code that is inconsistent with established codebase patterns. After your full analysis, append a structured findings section at the end with each finding on its own block containing these fields: severity (CRITICAL, HIGH, MEDIUM, or LOW), file (relative path), line (line number in the file), and description (what's wrong and how to fix it). End with your verdict: APPROVED or NEEDS_CHANGES."
 
-**Task C — code-quality-reviewer subagent:**
+### Task C — code-quality-reviewer
+- **subagent_type:** `code-quality-reviewer`
+- **model:** `"opus"`
 - Instruct: "Run your full review workflow on the changed files in this PR. The PR diff and file list are provided below for context, but you should read the full files, surrounding code, and codebase conventions to understand patterns. Run the build and tests to verify correctness. Do NOT flag pre-existing issues in unchanged code, but DO flag new code that is inconsistent with established codebase patterns. Compare changed or added types, fields, and parameters against equivalent definitions in sibling types throughout the schema or codebase — flag inconsistencies where the new code follows a different pattern than existing parallel types. IMPORTANT: Every item you flag in your analysis — whether a defect, a question for the author, or a pattern inconsistency — must also appear in the structured findings section. Do not omit items just because they are questions or observations rather than clear-cut defects. Use the severity guide provided above. After your full analysis, append a structured findings section at the end with each finding on its own block containing these fields: severity (CRITICAL, HIGH, MEDIUM, or LOW — use MEDIUM for questions/clarifications, LOW for observations), file (relative path), line (line number in the file), and description (what's wrong and how to fix it). End with your verdict: APPROVED or NEEDS_CHANGES."
 
-**Task D — adr-compliance-reviewer subagent:**
-- Instruct: "Run your full review workflow on the changed files in this PR. The PR diff and file list are provided below for context, but you should read the full files, surrounding code, and codebase conventions to understand ADR compliance patterns. Do NOT run builds or tests — focus on static code analysis only. Do NOT flag pre-existing issues in unchanged code, but DO flag new code that is inconsistent with established ADR conventions. Analyze for compliance with Fullbay's accepted ADRs: ADR-001 (Prefixed Base62 Entity Identifiers), ADR-002 (Backend For Frontend with AppSync), ADR-003 (React/Vite Frontend), ADR-004 (Module Federation Micro Frontends), ADR-005 (Zustand State Management). After your full analysis, append a structured findings section at the end with each finding on its own block containing these fields: severity (CRITICAL, HIGH, MEDIUM, or LOW), file (relative path), line (line number in the file), and description (which ADR is violated and how to fix it). End with your verdict: APPROVED or NEEDS_CHANGES."
+### Task D — adr-compliance-reviewer
+- **subagent_type:** `adr-compliance-reviewer`
+- **model:** `"opus"`
+- Instruct: "Run your full review workflow on the changed files in this PR. The PR diff and file list are provided below for context, but you should read the full files, surrounding code, and codebase conventions to understand ADR compliance patterns. Do NOT run builds or tests — focus on static code analysis only. Do NOT flag pre-existing issues in unchanged code, but DO flag new code that is inconsistent with established ADR conventions. Load all accepted ADRs and their Implementation Guides from the /Users/scottjones/code/architecture-decisions repository following your standard discovery process (Step 1), then check the PR changes against all applicable ADRs. After your full analysis, append a structured findings section at the end with each finding on its own block containing these fields: severity (CRITICAL, HIGH, MEDIUM, or LOW), file (relative path), line (line number in the file), and description (which ADR is violated and how to fix it). End with your verdict: APPROVED or NEEDS_CHANGES."
 
-**Task E — security-reviewer subagent:**
+### Task E — security-reviewer
+- **subagent_type:** `security-reviewer`
+- **model:** `"opus"`
 - Instruct: "Run your full review workflow on the changed files in this PR. The PR diff and file list are provided below for context, but you should read the full files, surrounding code, and codebase conventions to understand security patterns. Do NOT run builds or tests — focus on static code analysis only. Do NOT flag pre-existing issues in unchanged code, but DO flag new code that introduces security vulnerabilities or is inconsistent with established security patterns. After your full analysis, append a structured findings section at the end with each finding on its own block containing these fields: severity (CRITICAL, HIGH, MEDIUM, or LOW), file (relative path), line (line number in the file), and description (what the security issue is, the OWASP/CWE reference if applicable, the attack scenario, and how to fix it). End with your verdict: PASS or FAIL."
 
 ---
