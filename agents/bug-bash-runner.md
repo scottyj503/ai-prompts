@@ -213,36 +213,50 @@ Write **one** markdown report file at the CWD root, named `<UMBRELLA-or-batch-na
 
 ### 1.5 Hard pause — checkpoint
 
-Use `AskUserQuestion` with these options at minimum:
+Use `AskUserQuestion` to present the verdicts and the proposed Jira mutations. Show the mutations in the question's preview so the user sees exactly what will change before any write happens.
 
-- **Approve all + proceed to Phase 2** — apply the proposed Jira mutations (close not-reproducible, transition others to In Dev with assignee+Dev Owner = current user), then start fixing
+The **proposed mutations per verdict** are:
+
+| Verdict | Status transition | Assignee | Dev Owner | Comment |
+|---|---|---|---|---|
+| ✅ **Confirmed** | To Do → **In Dev** (id 7 in PARTS) | **current user** | **current user** | Brief verdict + fix direction (so the assignee has context when they pick it up) |
+| ⚠️ **Not reproduced** | To Do → **Closed** (id 3 in PARTS) | (no change) | **current user** | Explanation of what was checked and why it didn't reproduce — see the PARTS-940 close-out for the canonical shape |
+| ⚠️ **Partial / Reframe** | To Do → **In Dev** (id 7 in PARTS) | **current user** | **current user** | Reframe explanation + revised fix direction |
+
+"Current user" means the user running the agent (resolved from `JIRA_USER_EMAIL` → accountId via memory, or `GET /rest/api/3/myself`). Transition IDs come from the project's `reference-jira-*` memory; the table shows the PARTS values.
+
+Checkpoint options:
+
+- **Approve all + proceed to Phase 2** — apply the mutations above, then start fixing
+- **Approve all + stop here (triage only)** — apply the mutations above, write nothing further
 - **Edit a verdict** — user names which ticket and what to change; loop back to 1.2 for that ticket only
-- **Triage only — stop here** — apply Jira mutations, write nothing further
-
-Show the proposed Jira mutations in the question's preview so the user sees exactly what will change.
+- **Cancel** — apply nothing, present the report only
 
 ### 1.6 Apply Jira mutations (only after approval)
 
-Use the auth pattern from memory. Three operations per ticket:
+Use the auth pattern from memory. Order the three operations per ticket so the visible audit trail reads naturally: set Dev Owner/Assignee → post comment → transition. **Don't re-prompt per ticket** — the user already approved the batch at 1.5; bulk-apply.
 
 ```bash
-# Set Dev Owner (and assignee if approved)
+# 1. Set Dev Owner (+ Assignee for Confirmed / Partial-Reframe)
 curl -sL -X PUT -H "$AUTH_HEADER" -H "Content-Type: application/json" \
-  --data '{"fields":{"customfield_<DEV_OWNER_ID>":{"accountId":"<USER>"}}}' \
+  --data '{"fields":{
+    "customfield_<DEV_OWNER_ID>":{"accountId":"<USER>"},
+    "assignee":{"accountId":"<USER>"}    # omit this line for Not-Reproduced
+  }}' \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>"
 
-# Post comment (ADF JSON body)
+# 2. Post comment (ADF JSON body — content varies by verdict per the table above)
 curl -sL -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
   --data @<comment.json> \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>/comment"
 
-# Transition
+# 3. Transition — id depends on verdict: 7 (In Dev) for Confirmed/Partial, 3 (Closed) for Not-Reproduced
 curl -sL -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
   --data '{"transition":{"id":"<TRANSITION_ID>"}}' \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>/transitions"
 ```
 
-After applying, GET each ticket and verify the state landed.
+After applying, GET each ticket and verify `status.name`, `assignee.displayName`, and `customfield_<DEV_OWNER_ID>.displayName` match expectations. Report the verified state back to the user.
 
 ---
 
