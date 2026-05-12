@@ -309,13 +309,37 @@ Run sequentially in this agent (not a subagent — the output needs to land in y
 
 ### 2.7 PR + Slack
 
-Use `gh pr create` with title `fix(<TICKET>): <one-line summary>` and a body that includes Summary, Implementation notes, Test plan. After the PR is open, post to the project's Slack channel (from memory; e.g., `#peo-hrz-parts` for PARTS) in the canonical form:
+**Open the PR** with `gh pr create`:
+
+- Title: `fix(<TICKET>): <one-line summary>`
+- Body: Summary, Implementation notes, Test plan
+- Push the branch first if needed (`gh pr create` will prompt otherwise)
+
+**Post to Slack** immediately after the PR is open. Channel comes from the project memory (typically a `project-<bug-bash>.md` or similar). For Fullbay PARTS the channel is `#peo-hrz-parts` (id `C0A4X6JJ2D9`). For a different project, look it up in memory or ask.
+
+Canonical message format — match it exactly:
 
 ```
-[PR](<url>) for `<repo>` to <one-line-summary> :thank_you:
+[PR](<pr-url>) for `<repo>` to <one-line summary in lowercase, no period> :thank_you:
 ```
 
-One message per PR, no thread.
+Concrete examples (from prior PARTS bug-bash sessions):
+
+```
+[PR](https://github.com/fullbay/prt-main-uix/pull/232) for `prt-main-uix` to hide number input arrow steppers :thank_you:
+[PR](https://github.com/fullbay/prt-main-uix/pull/239) for `prt-main-uix` to persist receive/return toast across form remount :thank_you:
+```
+
+Notes:
+
+- The whole word `PR` is a markdown link, not just the URL — Slack auto-renders it as a clickable "PR" link
+- Repo name is wrapped in **backticks**
+- One-line summary uses **lowercase** (matches the "to <verb>…" pattern; reads like a continuation of "PR…to <action>")
+- `:thank_you:` is the **Fullbay custom emoji** — don't substitute `:pray:` or `:bow:`
+- **One message per PR, no thread.** Don't follow up in-thread with "here's the diff" etc. — reviewers click through to GitHub
+- Use the Slack MCP `mcp__plugin_slack_slack__slack_send_message` tool with the channel id (not the human-readable name) to post
+
+Don't preview every Slack post — the format is canonical. Do report to the user that the post landed (and surface any send error).
 
 ### 2.8 Loop or stop
 
