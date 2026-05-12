@@ -153,16 +153,32 @@ The default JSON includes the `comment` collection too. **Read the key details A
   - `assignee` / `reporter` — who to ask for clarification if reproduction is ambiguous
   - `labels` / `components` — narrows which repo/feature the bug touches
   - `issuelinks` — blockers, duplicates, "is caused by" links can change the verdict entirely
-  - `attachment` — screenshots / videos / HAR files from the reporter
+  - `attachment` — screenshots / videos / HAR files from the reporter (see "Fetch attachments" below)
 
 - **Comments commonly contain:**
   - "Already fixed in PR #N" — flip the verdict to *not reproduced* before opening the browser
   - "Repro only at width X / role Y / locale Z" — narrows your verification matrix
   - Earlier QA findings, dev notes, links to related PRs or duplicate tickets
-  - Screenshots that aren't in the description body
+  - Screenshots that aren't in the description body (look for `mediaSingle` / `media` ADF nodes in `comment.body`)
   - Status / deployment notes ("not yet on QA env")
 
-If a comment indicates the bug has been fixed, **verify by reproducing the *original* steps in the running app first**. If the bug truly doesn't reproduce, draft the *verified-as-fixed* mutation (Closed transition + comment) for Phase 1.4 preview — don't skip the actual check.
+- **Fetch attachments (images + videos especially):** the reporter's screenshots and screencasts are usually the highest-fidelity "how to reproduce" signal — much more concrete than the prose description. Don't skip them.
+
+  Each entry in `fields.attachment` has `filename`, `mimeType`, `size`, and `content` (the download URL). Inline embedded images in the description or comments appear as ADF `media` / `mediaSingle` nodes referencing the same attachment IDs. To fetch:
+
+  ```bash
+  # download into a temp dir and inspect
+  curl -sL -H "$AUTH_HEADER" -o "/tmp/<KEY>-<filename>" "<attachment.content>"
+  ```
+
+  Then:
+  - For **image** attachments (`image/png`, `image/jpeg`, `image/gif`): `Read` the file to view it visually. Use it to confirm the bug's visual symptom, the exact viewport / breakpoint, the route/state, and any highlighted elements. If your repro screenshot doesn't match the reporter's, you're either looking at the wrong route or the bug is gone.
+  - For **video / screencast** attachments (`video/mp4`, `video/quicktime`, etc.): can't directly play in this context. Extract intent from the filename + the reporter's prose; if those don't suffice, surface it as an open question for the user at the Phase 1.5 checkpoint ("Reporter attached a 12s screencast I can't play — can you summarize the repro steps?") rather than guessing.
+  - For **HAR / log attachments**: read as text to extract failing requests, payloads, error messages.
+
+  Skip attachments that are unrelated (e.g., a reporter's profile picture). Use mimeType + filename to filter.
+
+If a comment indicates the bug has been fixed, **verify by reproducing the *original* steps in the running app first** — using the reporter's attached screenshots/videos as the source of truth for what "the original bug" looked like. If the bug truly doesn't reproduce, draft the *verified-as-fixed* mutation (Closed transition + comment) for Phase 1.5 preview — don't skip the actual check.
 
 ### 1.2 Decide the verification approach
 
