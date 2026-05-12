@@ -232,7 +232,7 @@ Show the claim-batch as a preview via `AskUserQuestion` before the writes land (
 
 If a ticket is already In Dev (someone started it) or already in another non-To-Do state, skip the transition for that one but still note it in the claim summary. Don't blindly transition tickets out of meaningful state.
 
-After the batch lands, **verify the state landed** with a GET on each ticket. Report the claimed list back to the user as a confirmation table before moving to Phase 1.
+**Parallelize the claim writes.** Each ticket's claim mutations (field update + transition) are independent — fire all N field PUTs in parallel, then all N transition POSTs in parallel (one Bash tool call per ticket in a single message). Same for the verification GETs after the batch lands. Don't serialize — claim is pure I/O.
 
 This step replaces the "transition on Confirmed verdict" mutations that used to happen at Phase 1.6 — see the updated verdict-to-mutation table in 1.5.
 
@@ -319,6 +319,8 @@ AUTH_HEADER="Authorization: Basic $(printf '%s:%s' "$JIRA_USER_EMAIL" "$JIRA_API
 curl -sL -H "$AUTH_HEADER" -H "Content-Type: application/json" \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>?fields=summary,description,status,issuetype,priority,assignee,reporter,labels,components,issuelinks,attachment,created,updated,comment&expand=names"
 ```
+
+**Fan out the fetches.** N tickets = N independent REST calls — fire them in parallel (one Bash tool call per ticket in a single message, or one subagent per ticket if you also need them to download attachments and read them). Synthesize the returned tickets in this agent before deciding the verification approach. Don't serialize the fetch loop — that's pure I/O wait.
 
 The default JSON includes the `comment` collection too. **Read the key details AND every comment before deciding how to verify** — comments are where the most useful triage signal hides:
 
@@ -423,6 +425,8 @@ Checkpoint options:
 Use the auth pattern from memory. **Don't re-prompt per ticket** — the user already approved the batch at 1.5; bulk-apply.
 
 For most verdicts (Confirmed, Partial/Reframe) only the comment write is needed because the claim at 0.4 already set status/assignee/Dev Owner. For Not-Reproduced verdicts, also run the Closed transition.
+
+**Parallelize the writes.** Each ticket's mutations are independent — fire the comment POSTs (and any Closed transitions) for all N tickets in parallel (one Bash tool call per ticket in a single message). Pure I/O, no need to serialize. Same goes for the per-ticket GET verification afterwards — fan them out, synthesize the results.
 
 ```bash
 # All verdicts: post the verdict comment (ADF JSON body — content varies by verdict per the table above)
@@ -584,6 +588,11 @@ Update the TodoWrite list (mark this ticket completed, the next in_progress). Co
 
 **Batched parallel fixing** (advanced, only on explicit user request): instead of looping sequentially, set up worktrees for N tickets up front and run their full TDD cycles in parallel via subagent fan-out. Higher rebase risk on whichever lands second/third, but ~Nx wall-clock speedup. Same approach we used for the PARTS-{943,946,947} batch and the PARTS-{945,939,947-followup} batch.
 
+In batched mode the fan-out applies at three layers:
+- **Worktree setup (Phase 2.1) — one subagent per ticket** doing the `git worktree add` + env-file copy + `pnpm i` + build for its assigned ticket. Pure I/O; N×wall-clock speedup is real.
+- **TDD red/green (Phase 2.3 / 2.4) — fan out per ticket *and* per file** within each ticket. The parent fix subagent for each ticket itself spawns the per-test-file / per-impl-file subagents.
+- **Synthesis — always in this top-level agent.** Collect the N parallel ticket reports, then drive the serial commit gauntlet (per the contention notes below).
+
 **Port :8090 contention during parallel commits.** The pre-commit hook (`task local-build-and-test` → `pnpm run all` → `test:int`) spins up Playwright against the dev server on port 8090. With N parallel fix agents committing simultaneously, only one can hold `:8090` at a time — the others see flaky timeouts on otherwise-passing integration tests, and naive agents misdiagnose this as "broken tests" and reach for `--no-verify`. Mitigations, in order of preference:
 
 1. **Serialize commits in the parent agent.** Let agents run TDD + the rest of the gauntlet in parallel, but bottleneck the `git commit` step through this orchestrator so only one hook runs at a time. Cost: a few minutes of serial commit time.
@@ -603,7 +612,7 @@ When a reviewer leaves comments on an open PR you've shipped, the response shape
 FF recipe:
 
 1. **Branch off the original PR's branch tip** (NOT off master) so you can edit code introduced in the original without resurrecting the diff. Naming: `fix/PARTS-<N>-<short-followup-description>` (e.g. `fix/PARTS-946-aria-describedby-helper`).
-2. **For fix-shape comments**, write a RED test first (same TDD discipline as the original fix). For coverage-add or doc-cleanup comments, skip RED — just add the test/edit.
+2. **For fix-shape comments**, write a RED test first (same TDD discipline as the original fix — fan out research / red / green subagents per Phase 2.2–2.4 when the FF spans multiple files or aspects, e.g., one subagent for a11y reviewer-comment fix + one for test-coverage reviewer-comment fix). For coverage-add or doc-cleanup comments, skip RED — just add the test/edit.
 3. **Open the FF PR.** While the original is still open, target the original branch as base for a tight diff:
    ```bash
    gh pr create --base <original-branch> --head <ff-branch> ...
