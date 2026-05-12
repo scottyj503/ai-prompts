@@ -224,12 +224,18 @@ If a comment indicates the bug has been fixed, **verify by reproducing the *orig
 
 ### 1.2 Decide the verification approach
 
-Based on the ticket's contents:
+**Baseline for every ticket: open the running app in MCP (Playwright or Chrome DevTools) and reproduce the reporter's conditions** — same route, same viewport / breakpoint, same user state, same data. The user filed the bug from the UI; the verification has to happen there too. Source inspection is a *complement*, not a substitute — code can lie (dead branches, conditionally rendered components, hydration timing) and a screenshot is worth a thousand greps.
 
-- **Layout / responsive / visual** → drive the running app in MCP at the claimed breakpoint(s), capture screenshot, sometimes verify computed style (per `feedback-verify-computed-style` memory — class-string evidence isn't enough for grid/flex bugs).
-- **Interaction / mutation flow** → drive the form/widget. Be aware of Forge form-input quirks (`feedback-forge-form-inputs-not-programmable`): `FBDatePicker`, `FBCombobox`, Radix-wrapped inputs may not accept synthetic events. If full submit is blocked, fall back to source inspection.
-- **State / wiring / behavior** → grep + source inspection often beats UI repro. Look at handler wiring, hook callbacks, mutation onSuccess paths.
-- **Code-evidence "is X implemented?"** → no browser needed. Read the source.
+Source inspection layers on top per category:
+
+- **Layout / responsive / visual** → MCP at the claimed breakpoint(s) + screenshot **is** the verification. Source check confirms the layout primitives (grid columns, flex direction, breakpoint classes). For grid/flex bugs, also verify `getComputedStyle(el).gridTemplateColumns` / `flexDirection` at runtime — class-string evidence misses implicit-grid behavior (`feedback-verify-computed-style`).
+- **Interaction / mutation flow** → drive the form/widget in MCP. If a Forge component blocks programmatic input (`FBDatePicker`, `FBCombobox`, Radix-wrapped — see `feedback-forge-form-inputs-not-programmable`), get as far in MCP as you can (visible inputs, click sequences, console errors), then **complement** with source inspection of the handler/mutation path. Document the runtime limitation in the verdict so the PR can call it out.
+- **State / wiring / behavior** → reproduce the trigger in MCP, observe the (missing) outcome (a toast that doesn't appear, a tab that doesn't switch, a row that lands at the bottom). Then grep the handler/hook wiring to confirm root cause. The MCP run answers "does the bug manifest as the user described?"; the source check answers "where do we fix it?".
+- **Code-evidence "is X implemented?"** → still drive MCP first to confirm the user-visible symptom (or its absence). Source inspection can then say "yes, X is wired" or "no, the handler is a no-op" — but don't skip the MCP step just because you can read code faster. PR review reads better with a before-screenshot than with a grep transcript.
+
+**Source-only is acceptable only when the bug condition genuinely can't be reproduced in MCP** (e.g., requires production data, a role you can't impersonate, or a multi-user race). Mark such verdicts explicitly — "verified via source inspection; MCP repro blocked by <reason>" — and don't pretend the runtime check happened.
+
+Always capture screenshots (before-state) during MCP verification — they go straight into the report's Evidence section and the eventual PR description.
 
 ### 1.3 Verdict shape
 
