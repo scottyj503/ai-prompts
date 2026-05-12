@@ -111,7 +111,25 @@ curl -sL -H "$AUTH_HEADER" "https://${JIRA_BASE_URL}/rest/api/3/search?jql=paren
 
 Present the discovered list and confirm before proceeding.
 
-### 0.4 Start dev server if needed
+### 0.4 Claim the tickets — set Status, Assignee, Dev Owner up front
+
+**Before any verification work begins**, claim every ticket in scope on behalf of the user running the agent. This is the "I'm picking this up" signal — it tells the team the tickets are actively being worked on so nobody else duplicates the verification, and it sets the audit trail correctly (To Do → In Dev when you start, not retroactively).
+
+Per ticket, apply:
+
+- **Status:** To Do → **In Dev** (transition id 7 in PARTS; pull from project memory for other projects)
+- **Assignee:** current user (`JIRA_USER_EMAIL` → accountId, or `GET /rest/api/3/myself`)
+- **Dev Owner:** current user (`customfield_10178` in PARTS; pull from project memory for other projects)
+
+Show the claim-batch as a preview via `AskUserQuestion` before the writes land — same pattern as `feedback-confirm-jira-state-changes`. After the user approves the pattern on the first ticket, bulk-apply across the rest. Let the user exclude tickets from the claim (e.g., "skip PARTS-X — Bob's already on it") at the same prompt.
+
+If a ticket is already In Dev (someone started it) or already in another non-To-Do state, skip the transition for that one but still note it in the claim summary. Don't blindly transition tickets out of meaningful state.
+
+After the batch lands, **verify the state landed** with a GET on each ticket. Report the claimed list back to the user as a confirmation table before moving to Phase 1.
+
+This step replaces the "transition on Confirmed verdict" mutations that used to happen at Phase 1.6 — see the updated verdict-to-mutation table in 1.5.
+
+### 0.5 Start dev server if needed
 
 For Phase 1 reproduction, the agent needs the target repo's dev server running. Check `:8090` (or the port specified in the repo's `CLAUDE.md`):
 
@@ -121,7 +139,7 @@ lsof -iTCP:<port> -sTCP:LISTEN || (cd <repo> && pnpm dev > /tmp/<repo>-dev.log 2
 
 Verify it's serving the right branch (current `git branch --show-current` in the repo).
 
-### 0.5 Inject auth cookies into the MCP browser
+### 0.6 Inject auth cookies into the MCP browser
 
 Reading `prt-main-uix/CLAUDE.md` will tell you to use `playwright/.auth/user.json` for auth — but the **injection method matters**. Per `reference-mcp-auth-cookies`:
 
@@ -263,42 +281,40 @@ Write **one** markdown report file at the CWD root, named `<UMBRELLA-or-batch-na
 
 Use `AskUserQuestion` to present the verdicts and the proposed Jira mutations. Show the mutations in the question's preview so the user sees exactly what will change before any write happens.
 
+**Starting state at this checkpoint:** every ticket in scope is already **In Dev**, **assigned to the current user**, and has **Dev Owner = current user** because of the Phase 0.4 claim. The mutations here are *adjustments* to that starting state, not first-time writes.
+
 The **proposed mutations per verdict** are:
 
 | Verdict | Status transition | Assignee | Dev Owner | Comment |
 |---|---|---|---|---|
-| ✅ **Confirmed** | To Do → **In Dev** (id 7 in PARTS) | **current user** | **current user** | Brief verdict + fix direction (so the assignee has context when they pick it up) |
-| ⚠️ **Not reproduced** | To Do → **Closed** (id 3 in PARTS) | (no change) | **current user** | Explanation of what was checked and why it didn't reproduce — see the PARTS-940 close-out for the canonical shape |
-| ⚠️ **Partial / Reframe** | To Do → **In Dev** (id 7 in PARTS) | **current user** | **current user** | Reframe explanation + revised fix direction |
+| ✅ **Confirmed** | (none — already In Dev) | (none — already current user) | (none — already current user) | Brief verdict + fix direction |
+| ⚠️ **Not reproduced** | In Dev → **Closed** (id 3 in PARTS) | (none — leave as current user for the audit trail) | (none — already current user) | Explanation of what was checked and why it didn't reproduce — see the PARTS-940 close-out for the canonical shape |
+| ⚠️ **Partial / Reframe** | (none — already In Dev) | (none — already current user) | (none — already current user) | Reframe explanation + revised fix direction |
+
+For most tickets the only checkpoint mutation is the comment. Status transitions are only needed to flip a Not-Reproduced ticket from In Dev to Closed.
 
 "Current user" means the user running the agent (resolved from `JIRA_USER_EMAIL` → accountId via memory, or `GET /rest/api/3/myself`). Transition IDs come from the project's `reference-jira-*` memory; the table shows the PARTS values.
 
 Checkpoint options:
 
-- **Approve all + proceed to Phase 2** — apply the mutations above, then start fixing
-- **Approve all + stop here (triage only)** — apply the mutations above, write nothing further
+- **Approve all + proceed to Phase 2** — post the comments, transition Not-Reproduced tickets to Closed, then start fixing
+- **Approve all + stop here (triage only)** — post the comments, transition Not-Reproduced tickets to Closed, write nothing further
 - **Edit a verdict** — user names which ticket and what to change; loop back to 1.2 for that ticket only
-- **Cancel** — apply nothing, present the report only
+- **Cancel** — apply nothing, present the report only (the Phase 0.4 claim is *not* reverted — the tickets stay In Dev/assigned. Mention this in the cancel summary)
 
 ### 1.6 Apply Jira mutations (only after approval)
 
-Use the auth pattern from memory. Order the three operations per ticket so the visible audit trail reads naturally: set Dev Owner/Assignee → post comment → transition. **Don't re-prompt per ticket** — the user already approved the batch at 1.5; bulk-apply.
+Use the auth pattern from memory. **Don't re-prompt per ticket** — the user already approved the batch at 1.5; bulk-apply.
+
+For most verdicts (Confirmed, Partial/Reframe) only the comment write is needed because the claim at 0.4 already set status/assignee/Dev Owner. For Not-Reproduced verdicts, also run the Closed transition.
 
 ```bash
-# 1. Set Dev Owner (+ Assignee for Confirmed / Partial-Reframe)
-curl -sL -X PUT -H "$AUTH_HEADER" -H "Content-Type: application/json" \
-  --data '{"fields":{
-    "customfield_<DEV_OWNER_ID>":{"accountId":"<USER>"},
-    "assignee":{"accountId":"<USER>"}    # omit this line for Not-Reproduced
-  }}' \
-  "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>"
-
-# 2. Post comment (ADF JSON body — content varies by verdict per the table above)
+# All verdicts: post the verdict comment (ADF JSON body — content varies by verdict per the table above)
 curl -sL -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
   --data @<comment.json> \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>/comment"
 
-# 3. Transition — id depends on verdict: 7 (In Dev) for Confirmed/Partial, 3 (Closed) for Not-Reproduced
+# Not-Reproduced only: transition In Dev -> Closed (id 3 in PARTS)
 curl -sL -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
   --data '{"transition":{"id":"<TRANSITION_ID>"}}' \
   "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>/transitions"
