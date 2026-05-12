@@ -134,10 +134,18 @@ This step replaces the "transition on Confirmed verdict" mutations that used to 
 For Phase 1 reproduction, the agent needs the target repo's dev server running. Check `:8090` (or the port specified in the repo's `CLAUDE.md`):
 
 ```bash
-lsof -iTCP:<port> -sTCP:LISTEN || (cd <repo> && pnpm dev > /tmp/<repo>-dev.log 2>&1 &)
+PORT=8090   # or from CLAUDE.md
+REPO=<repo>
+
+if ! lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null; then
+  (cd $REPO && pnpm dev > /tmp/$REPO-dev.log 2>&1 &)
+  echo $! > /tmp/$REPO-dev.pid    # remember the PID so Phase 3 can clean it up
+fi
 ```
 
 Verify it's serving the right branch (current `git branch --show-current` in the repo).
+
+**Why track the PID:** if the agent started the dev server, it owns the lifecycle and must clean it up at Phase 3. If the dev server was already running before the agent started (the `lsof` check returns 0), it belongs to the user — don't write a PID file, don't kill it later. The presence of `/tmp/<repo>-dev.pid` is the marker that "we started it, we kill it".
 
 ### 0.6 Inject auth cookies into the MCP browser
 
@@ -473,9 +481,29 @@ A typical FF run today: ~30 min from "let's address" to merged. Two confirmed ex
 
 After all tickets in scope are PR'd:
 
-1. **Update auto-memory** — write a batch-notes section to the project memory file with PR links and any new lessons learned. New surprises become new feedback memories (one each, with **Why** and **How to apply** sections).
-2. **Final summary** — present the user with a status table: ticket | verdict | PR link | branch.
-3. **End-of-session checklist** — flag anything that needs human action (review requests, CI failures, follow-up tickets to file).
+1. **Kill the dev server (if the agent started it).** Phase 0.5 wrote `/tmp/<repo>-dev.pid` if and only if the agent started the dev server. Use that marker to clean up — don't kill processes the agent didn't start.
+
+   ```bash
+   for pidfile in /tmp/*-dev.pid; do
+     [ -f "$pidfile" ] || continue
+     PID=$(cat "$pidfile")
+     kill "$PID" 2>/dev/null
+     sleep 1
+     # If a port remains held (CLOSE_WAIT etc.), it's usually just browser sockets — fine.
+     # If a node listener still owns the port, that's the dev server resisting SIGTERM; try SIGKILL.
+     kill -9 "$PID" 2>/dev/null
+     rm -f "$pidfile"
+   done
+   lsof -iTCP:8090 -sTCP:LISTEN || echo ":8090 free"
+   ```
+
+   If the agent did NOT start the dev server (no pid file), leave the user's existing process alone. Mention in the final summary that you didn't touch it.
+
+   This step matters because stale dev servers on `:8090` cause false-positive flaky-test failures in future sessions (`feedback-check-port-8090-collisions`). Leaving one running is a foot-gun for the next bug-bash run.
+
+2. **Update auto-memory** — write a batch-notes section to the project memory file with PR links and any new lessons learned. New surprises become new feedback memories (one each, with **Why** and **How to apply** sections).
+3. **Final summary** — present the user with a status table: ticket | verdict | PR link | branch. Note whether the dev server was killed (and which port) or left alone.
+4. **End-of-session checklist** — flag anything that needs human action (review requests, CI failures, follow-up tickets to file).
 
 ---
 
