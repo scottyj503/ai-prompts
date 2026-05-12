@@ -521,7 +521,29 @@ Don't fan out for single-file refactors, one-line CSS changes, or anything where
 
 Drive the running app in MCP at the conditions described in the ticket — same route, same viewport, same data — and confirm the bug no longer reproduces. Capture an **after-fix screenshot** to `/tmp/<TICKET>-after-fix-<timestamp>.png` and pair it with the Phase 1 before-screenshot in the report. For layout fixes, verify computed style at the target breakpoint(s). If the fix requires a mutation flow you can't drive (Forge form quirks), fall back to unit-test coverage and explicitly call out the limitation in the PR description AND in the runtime-check section of the report.
 
-A green test suite without a runtime-check pass is **not a complete fix**. If the agent skips this step, the user will push back ("did you confirm the fix via Playwright?") and you'll re-run it under time pressure. Do it once, do it inline.
+**For fixes touching form submit, validation, or any action that triggers a network call: UI verification alone is not sufficient.** Inspect the actual network request payload, not just the absence of UI validation errors. A fix can silently trade "UI shows errors" for "API call gets malformed payload" — a worse regression that a UI-only check completely misses.
+
+Concrete failure case to learn from — PARTS-954 (2026-05-12): a fix skipped empty default line items in `validateForSubmission` / `validateForDraft`, removing UI validation errors. The after-screenshot showed "no validation errors, no `aria-invalid` inputs" and the verdict landed as PASS. Code review later flagged that the empty row was still in `data.lineItems` at submit time, `transformFormDataToInput` mapped over it, and `createPurchaseOrders` fired with `vendorId: ""` and a blank `partNumber`. The verdict missed the regression entirely because the network request was never inspected.
+
+Recipe for any submit/mutation/network-triggering fix:
+
+1. **Before clicking submit**, list outstanding network requests so you have a baseline:
+   ```
+   mcp__playwright__browser_network_requests
+   ```
+2. **Click the submit / trigger the action** in MCP.
+3. **List requests again** and identify the new entry (or confirm no request was made if validation should have blocked it).
+4. **Assert four things on the new request**, not just one:
+   - **Was it made?** Sometimes "no UI error" means submit was silently blocked.
+   - **Is the URL correct?** The expected mutation endpoint, not a stale or unrelated one.
+   - **Is the payload well-formed?** Required fields populated with non-empty values; no placeholder rows leaking through; types match the schema.
+   - **Did the response succeed?** 200/204 with the expected shape — not a 4xx with a meaningful error the UI swallowed.
+5. **If validation should have blocked the action**, confirm no request was made.
+6. **Document the network-level check in the after-fix runtime-check section of the report** — "POST /graphql fired with `vendorId: 'vendor_abc'`, `lineItems: [{...}]`, response 200" or similar. The PR description benefits from this too.
+
+A green test suite + a passing UI check + an unverified network payload is **still not a complete fix** for submission-shaped bugs.
+
+A green test suite without any runtime-check pass is **not a complete fix** either. If the agent skips this step, the user will push back ("did you confirm the fix via Playwright?") and you'll re-run it under time pressure. Do it once, do it inline.
 
 This step is single-threaded by nature (one browser session) — don't fan out.
 
