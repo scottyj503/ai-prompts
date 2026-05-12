@@ -65,7 +65,13 @@ The agent has PARTS-specific knobs baked in so it works in any fresh bug-bash wo
 
 - `prt-main-uix` — Parts micro-frontend (Vite host, port 8090)
 - `ven-main-uix` — Vendors micro-frontend (also port 8090; only one at a time)
-- `@fullbay/forge` — design system, source at `/Users/scottjones/code/ui-forge-web` (has its own `CLAUDE.md` + Storybook + Chromatic). Components consumed by both MFs (`FBToast`, `FBCombobox`, `FBInput`, `FBButton`, `FBFormItem`, `FBSkeleton`, etc.). When a fix touches one of these — or depends on behavior the design system controls — check the Forge source before guessing.
+- `@fullbay/forge` — design system, **absolute path `/Users/scottjones/code/ui-forge-web`** (has its own `CLAUDE.md` + Storybook + Chromatic). npm package name is `@fullbay/forge`. Components consumed by both MFs include `FBToast`, `FBCombobox`, `FBInput`, `FBButton`, `FBFormItem`, `FBSkeleton`, `FBDatePicker`, `FBFormField`, `FBFormMessage`, etc.
+
+  **When and how to use Forge as a reference:**
+  - Bug touches an FB-prefixed component → read the component's source under `/Users/scottjones/code/ui-forge-web/src/` before guessing at its behavior (e.g., default props, internal state, event handlers, exposed test ids).
+  - Need to know which Tailwind classes are actually emitted in the MF bundle → grep `/Users/scottjones/code/ui-forge-web/node_modules/@fullbay/forge/dist/styles/index.css` (or the same file inside the MF's `node_modules`) for the **escaped form** (`\.xl\\:grid-cols-5`). The bundle is ~272 KB.
+  - Need to know whether a "fix this in Forge first" is the right move → check Forge's own `CLAUDE.md` and the Storybook story for the component (`build-storybook.log` lists the available stories).
+  - A test mock for a Forge component needs to mirror a prop or render signature → read the canonical component source; don't reverse-engineer from consumer usage.
 
 ### Jira (env `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`, `JIRA_BASE_URL`)
 
@@ -170,11 +176,16 @@ Phase 3: Wrap
 
 The agent assumes its CWD is a parent folder containing the relevant repo(s) as immediate subdirectories.
 
+**Capture the absolute root path once and derive every other path from it** — relative paths break when shells change cwd between tool calls or when subagents inherit a different working directory.
+
 ```bash
-find . -maxdepth 2 -type d -name .git | sed 's|/.git$||'
+export BUG_BASH_ROOT="$(pwd)"
+find "$BUG_BASH_ROOT" -maxdepth 2 -type d -name .git | sed 's|/\.git$||'
 ```
 
-Report the detected repos to the user. If none found, ask for the parent folder.
+The `find` output is now a list of absolute repo paths. Report the detected repos (absolute paths) to the user. If none found, ask for the parent folder.
+
+Throughout the rest of this prompt, treat `$BUG_BASH_ROOT` as the absolute parent folder, `$BUG_BASH_ROOT/<repo>` as an absolute repo path, and `$BUG_BASH_ROOT/<TICKET>/<repo>` as an absolute per-ticket worktree path. **Don't use `.`, `./`, or `../` in commands** — always anchor to `$BUG_BASH_ROOT` or another absolute base.
 
 ### 0.2 Load memory (best-effort overlay)
 
@@ -230,16 +241,17 @@ This step replaces the "transition on Confirmed verdict" mutations that used to 
 For Phase 1 reproduction, the agent needs the target repo's dev server running. Check `:8090` (or the port specified in the repo's `CLAUDE.md`):
 
 ```bash
-PORT=8090   # or from CLAUDE.md
-REPO=<repo>
+PORT=8090                          # or from <repo>/CLAUDE.md
+REPO=prt-main-uix                  # repo name (last path segment)
+REPO_DIR="$BUG_BASH_ROOT/$REPO"    # absolute path to the repo
 
 if ! lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null; then
-  (cd $REPO && pnpm dev > /tmp/$REPO-dev.log 2>&1 &)
-  echo $! > /tmp/$REPO-dev.pid    # remember the PID so Phase 3 can clean it up
+  (cd "$REPO_DIR" && pnpm dev > "/tmp/$REPO-dev.log" 2>&1 &)
+  echo $! > "/tmp/$REPO-dev.pid"   # remember the PID so Phase 3 can clean it up
 fi
 ```
 
-Verify it's serving the right branch (current `git branch --show-current` in the repo).
+Verify it's serving the right branch — `git -C "$REPO_DIR" branch --show-current` (uses `-C` so we never depend on cwd).
 
 **Why track the PID:** if the agent started the dev server, it owns the lifecycle and must clean it up at Phase 3. If the dev server was already running before the agent started (the `lsof` check returns 0), it belongs to the user — don't write a PID file, don't kill it later. The presence of `/tmp/<repo>-dev.pid` is the marker that "we started it, we kill it".
 
@@ -450,22 +462,30 @@ Loop sequentially through the approved fix queue. For each ticket:
 ```bash
 TICKET=<KEY>
 SLUG=<short-kebab-summary>
+
 for repo in <affected-repos>; do
-  git -C "$repo" worktree add "../$TICKET/$repo" -b "fix/$TICKET-$SLUG" origin/master
+  SOURCE_REPO="$BUG_BASH_ROOT/$repo"                    # absolute path to source repo
+  WORKTREE_DIR="$BUG_BASH_ROOT/$TICKET/$repo"           # absolute path to per-ticket worktree
+
+  # Branch off origin/master into the worktree
+  git -C "$SOURCE_REPO" worktree add "$WORKTREE_DIR" -b "fix/$TICKET-$SLUG" origin/master
+
   # Copy gitignored env files — without these, the pre-commit hook's test:int
   # fails on missing VITE_*_GRAPHQL_ENDPOINT and the agent is tempted to --no-verify.
-  cp "$repo/.env" "$repo/.env.local.test" "$TICKET/$repo/" 2>/dev/null
+  cp "$SOURCE_REPO/.env" "$SOURCE_REPO/.env.local.test" "$WORKTREE_DIR/" 2>/dev/null
+
   # Refresh CodeArtifact token, install, build — these are the prtins/cenvv equivalent.
   # Skipping any of them leaves the worktree unable to run the project verification bundle.
-  (cd "$TICKET/$repo" && refresh_codeartifact_token && pnpm i --frozen-lockfile && pnpm run build)
+  (cd "$WORKTREE_DIR" && refresh_codeartifact_token && pnpm i --frozen-lockfile && pnpm run build)
+
   # Auth file is gitignored — copy from source repo so int tests can run
-  mkdir -p "$TICKET/$repo/playwright/.auth"
-  cp "$repo/playwright/.auth/user.json" "$TICKET/$repo/playwright/.auth/" 2>/dev/null || \
-    (cd "$TICKET/$repo" && pnpm test:int:auth)
+  mkdir -p "$WORKTREE_DIR/playwright/.auth"
+  cp "$SOURCE_REPO/playwright/.auth/user.json" "$WORKTREE_DIR/playwright/.auth/" 2>/dev/null \
+    || (cd "$WORKTREE_DIR" && pnpm test:int:auth)
 done
 ```
 
-`<affected-repos>` comes from the ticket's fix direction — by default the repo where the bug code lives.
+`<affected-repos>` is the bare repo name (e.g., `prt-main-uix`) — `$BUG_BASH_ROOT/<repo>` resolves it to the absolute source path. The ticket's fix direction tells you which repo(s) to include; default is the repo where the bug code lives.
 
 **Warmup is non-negotiable.** A worktree with no `.env` / `.env.local.test`, no `node_modules`, or no `dist/` will appear to work for code edits but explode at commit time when the pre-commit hook runs `test:int`. This is the single most common reason fix agents reach for `--no-verify` — and bypassing the hook breaks the audit trail. The user's `prtins` (prt-main-uix) and `cenvv && rca && pci && prb` (ven-main-uix) aliases encode this exact warmup; the inline equivalents above are what the agent must run when aliases aren't in scope.
 
