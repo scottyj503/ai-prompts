@@ -675,28 +675,15 @@ After all tickets in scope are PR'd:
 
 ---
 
-## Memory references (cross-references / further reading — not load-bearing)
+## Running against a non-PARTS project
 
-The agent prompt is **self-contained** — the Fullbay PARTS context, the inline gotcha guidance, and the per-phase recipes are all baked in. The memory files below are the canonical source-of-truth for these rules and are useful for:
+The agent prompt is **self-contained for PARTS**. For any other project, the baked-in PARTS values (Jira field IDs, transition IDs, Slack channel, dev port, repo names, Forge path, etc.) do not apply. The agent must look up corresponding values from:
 
-- **Cross-reference** when the user asks "where is X documented?"
-- **Updates over time** — when a rule changes, edit the memory file first, then propagate the change into this prompt
-- **Other projects** — a non-PARTS bug bash would set up parallel memory files with that project's values
+1. **Phase 0.2 CWD memory** — if the project has its own `~/.claude/projects/<slugified-cwd>/memory/MEMORY.md` with `reference-*` / `feedback-*` files, read those for the project-specific knobs.
+2. **The repo's `CLAUDE.md`** — canonical for verification bundle, dev-server port, and project gotchas.
+3. **The user** — ask before any mutation when a value isn't derivable from (1) or (2).
 
-| Memory file | What lives there |
-|-------------|------------------|
-| `reference-jira-parts.md` | accountId, custom field IDs, transition IDs, auth pattern (PARTS values are baked into Fullbay PARTS context above) |
-| `reference-forge-design-system.md` | Forge path, FB component sources, per-PR pointers (baked into Fullbay PARTS context above) |
-| `reference-mf-no-tailwind.md` | The "no Tailwind at build time" rule + grep trap (baked into Fullbay PARTS context above) |
-| `reference-mcp-auth-cookies.md` | The `page.context().addCookies(...)` recipe for Descope on `http://localhost` (baked into Phase 0.6 above) |
-| `feedback-confirm-jira-state-changes.md` | The "preview before mutate, bulk-apply after pattern approved" rule (baked into Operating constraint #4) |
-| `feedback-fan-out-subagents.md` | The "delegate by default" pattern (baked into Operating constraint #2 + Phase 1/2 fan-out sections) |
-| `feedback-verify-computed-style.md` | The class-string-isn't-enough rule for layout fixes (baked into Fullbay PARTS context + Phase 2.3) |
-| `feedback-forge-form-inputs-not-programmable.md` | FBDatePicker / FBCombobox / Radix programmability strategy (baked into Fullbay PARTS context + Phase 1.2) |
-| `feedback-check-port-8090-collisions.md` | The stale-dev-server-on-:8090 trap (baked into Operating constraint #7 + Phase 3.1) |
-| `feedback-fast-follow-pr-workflow.md` | FF vs same-PR decision rule + deleted-base-branch recovery (baked into Phase 2.9) |
-
-When running this agent against a **non-PARTS project**, expect different field IDs / channels / ports / conventions. Look up corresponding values from that project's CWD memory, the repo's `CLAUDE.md`, or ask the user. Never substitute PARTS values for a non-PARTS project.
+Never substitute PARTS values for a non-PARTS project. Confirm Jira transition IDs via `GET /rest/api/3/issue/<KEY>/transitions` before any status mutation in unfamiliar projects.
 
 ---
 
