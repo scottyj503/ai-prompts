@@ -272,7 +272,31 @@ SDLC orchestration agent that coordinates the complete software development life
 
 ---
 
-### 15. **terraform-agent**
+### 15. **bug-bash-runner**
+Two-phase agent for batched bug triage and fixing. Drives verification in MCP (Playwright or Chrome DevTools), pauses for human direction, then runs per-ticket TDD with runtime green-check.
+
+**Use Cases:**
+- Triaging a Jira bug-bash umbrella with multiple child tickets
+- Verifying a batch of bug keys against a running app (reproduce or close out)
+- Driving the per-ticket TDD loop with worktree-per-ticket and PR-per-ticket
+- Posting PR announcements to the project's Slack channel
+- Tracking already-fixed bugs and closing them with a previewed Jira comment + transition
+
+**Triggers:** Automatically invoked when you reference a bug-bash umbrella, paste a list of bug keys, or use phrases like "bug bash", "let's go through these bugs", or "verify and fix these". Also invoked by the `/bug-bash` command.
+
+**Phases:**
+- Phase 1 (verify) — fan-out subagents per ticket, no Jira mutations, ends in `AskUserQuestion` checkpoint
+- Phase 2 (fix) — per-ticket TDD with subagent fan-out for research/red/green; runtime green-check in MCP; project verification bundle; PR + Slack post
+
+**Output:** Single bug-bash report file with verdicts + fix directions, then (if approved) PRs per ticket with consistent branch naming.
+
+**Memory-driven:** Reads project-specific knobs (Jira field/transition IDs, Slack channel, dev-server port, verification bundle) from auto-memory rather than hardcoding — portable across projects.
+
+**Cross-reference:** Use the `/bug-bash` command to kick off in triage-only mode with explicit ticket-key arguments.
+
+---
+
+### 16. **terraform-agent**
 Generates Terraform infrastructure as code following AWS best practices with proper state management, security, and testing.
 
 **Use Cases:**
@@ -352,6 +376,7 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/createReview [--omit=N,...] [--approve]` | Post a GitHub PR review with inline comments from a prior `/codereview` run |
 | `/figma-extract <figma-url>` | Extract Figma design specs (frames, components, tokens) for offline analysis |
 | `/getLatestClaudeReleaseNotes [version]` | Fetch the latest Claude Code release notes from GitHub |
+| `/bug-bash <TICKET-KEY> [TICKET-KEY ...]` | Kick off a bug-bash verification run on a list of Jira tickets (or a single umbrella key) using the bug-bash-runner agent |
 
 ---
 
@@ -582,6 +607,8 @@ export JIRA_BASE_URL="your-company.atlassian.net"
 | "Help me test this Jira story" | qa-testing-agent | Agent |
 | "Build a complete project" | routing-agent | Agent |
 | "Generate Terraform for this infra" | terraform-agent | Agent |
+| "Triage and fix a batch of related bugs" | bug-bash-runner | Agent |
+| "Run a bug-bash verification phase" | /bug-bash | Command |
 | "Review this Java code" | java-quarkus-expert | Skill |
 | "Help with React MF architecture" | react-mf-expert | Skill |
 | "Help me write tests" | react-testing-expert | Skill |
@@ -683,6 +710,11 @@ allowed-tools: Bash(git:*), Read, Glob
 **Solution**: Ensure the `.md` file is in the `commands/` directory (project-level or user-level) and has a valid `description` in the frontmatter.
 
 ## Version History
+
+- **v6.0 (2026-05)**: Bug-bash workflow
+  - Added `bug-bash-runner` agent — two-phase batched bug triage + per-ticket TDD fix loop with mandatory verify→pause→fix checkpoint
+  - Added `/bug-bash` slash command — kicks off the bug-bash-runner in triage-only mode against a list of Jira keys or an umbrella in a multi-repo CWD
+  - Memory-driven design: project knobs (Jira field/transition IDs, Slack channel, dev-server port) come from auto-memory so the agent is portable across projects without prompt edits
 
 - **v5.0 (2026-04)**: Review pipeline and specialized reviewers
   - Added `/review` command — orchestrates 5 parallel reviewers on a PR and submits an atomic GitHub review with inline comments
