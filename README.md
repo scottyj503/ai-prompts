@@ -711,6 +711,14 @@ allowed-tools: Bash(git:*), Read, Glob
 
 ## Version History
 
+- **v6.1 (2026-05)**: Bug-bash hardening from real-world use
+  - **Worktree warmup added to Phase 2.1** — env file copy (`.env`, `.env.local.test`), `refresh_codeartifact_token`, `pnpm i`, `pnpm build`. Prevents the `--no-verify` trap where the pre-commit hook's `test:int` couldn't reach GraphQL.
+  - **Slack MCP tool added to `bug-bash-runner` tool list** — `mcp__plugin_slack_slack__slack_send_message`. Closes the gap where v6.0's Phase 2.7 told the agent to post but didn't grant the tool.
+  - **Phase 2.5 (runtime green-check) hardened** — now explicitly mandatory before 2.6; requires `/tmp/<TICKET>-after-fix-<timestamp>.png` paired with the Phase 1 before-screenshot. Green tests without a runtime pass is not a complete fix.
+  - **Port :8090 contention guidance added to Phase 2.8** — three ranked mitigations for parallel commit-hook collisions (serialize / stagger / port override). Explicit "do NOT default to `--no-verify`" callout.
+  - **New Section 1.7 (Refinement and correction addenda)** — codifies the addendum-comment pattern for when later findings refine or contradict an earlier Jira verdict. Originals are never edited; later evidence lands as a new comment with the canonical "Follow-up from live verification" or "Correction to the YYYY-MM-DD follow-up" shape.
+  - **Phase 2.7 expanded with a Jira verification comment** — after the PR opens and Slack lands, post a short canonical comment on the Jira ticket itself with date, what was verified live, after-screenshot path, and PR link. Closes the audit trail on the ticket side, not just the PR side.
+
 - **v6.0 (2026-05)**: Bug-bash workflow
   - Added `bug-bash-runner` agent — two-phase batched bug triage + per-ticket TDD fix loop with mandatory verify→pause→fix checkpoint
   - Added `/bug-bash` slash command — kicks off the bug-bash-runner in triage-only mode against a list of Jira keys or an umbrella in a multi-repo CWD
