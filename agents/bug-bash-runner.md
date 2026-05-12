@@ -134,18 +134,46 @@ For each ticket in scope, produce a structured verdict.
 
 Don't serialize source-only verifications waiting for browser work to finish — the browser work and the source-only fan-out can overlap.
 
-### 1.1 Per-ticket verification
+### 1.1 Fetch the full ticket (do this before any verification)
 
-Fetch the ticket. Parse description for: reproduction steps, screenshots, the user's claim.
+For each key in scope, pull the full Jira ticket — not just `summary`/`description`/`status`. Use this field set:
 
-Decide the verification approach:
+```bash
+AUTH_HEADER="Authorization: Basic $(printf '%s:%s' "$JIRA_USER_EMAIL" "$JIRA_API_TOKEN" | base64)"
+curl -sL -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+  "https://${JIRA_BASE_URL}/rest/api/3/issue/<KEY>?fields=summary,description,status,issuetype,priority,assignee,reporter,labels,components,issuelinks,attachment,created,updated,comment&expand=names"
+```
+
+The default JSON includes the `comment` collection too. **Read the key details AND every comment before deciding how to verify** — comments are where the most useful triage signal hides:
+
+- **Key details to note:**
+  - `summary`, `description` — the reporter's claim and steps to reproduce
+  - `priority`, `issuetype` — sometimes the priority tells you whether to be exhaustive or quick
+  - `status` — if it's already In Dev / In QA / Closed, you may be verifying a fix, not the original bug
+  - `assignee` / `reporter` — who to ask for clarification if reproduction is ambiguous
+  - `labels` / `components` — narrows which repo/feature the bug touches
+  - `issuelinks` — blockers, duplicates, "is caused by" links can change the verdict entirely
+  - `attachment` — screenshots / videos / HAR files from the reporter
+
+- **Comments commonly contain:**
+  - "Already fixed in PR #N" — flip the verdict to *not reproduced* before opening the browser
+  - "Repro only at width X / role Y / locale Z" — narrows your verification matrix
+  - Earlier QA findings, dev notes, links to related PRs or duplicate tickets
+  - Screenshots that aren't in the description body
+  - Status / deployment notes ("not yet on QA env")
+
+If a comment indicates the bug has been fixed, **verify by reproducing the *original* steps in the running app first**. If the bug truly doesn't reproduce, draft the *verified-as-fixed* mutation (Closed transition + comment) for Phase 1.4 preview — don't skip the actual check.
+
+### 1.2 Decide the verification approach
+
+Based on the ticket's contents:
 
 - **Layout / responsive / visual** → drive the running app in MCP at the claimed breakpoint(s), capture screenshot, sometimes verify computed style (per `feedback-verify-computed-style` memory — class-string evidence isn't enough for grid/flex bugs).
 - **Interaction / mutation flow** → drive the form/widget. Be aware of Forge form-input quirks (`feedback-forge-form-inputs-not-programmable`): `FBDatePicker`, `FBCombobox`, Radix-wrapped inputs may not accept synthetic events. If full submit is blocked, fall back to source inspection.
 - **State / wiring / behavior** → grep + source inspection often beats UI repro. Look at handler wiring, hook callbacks, mutation onSuccess paths.
 - **Code-evidence "is X implemented?"** → no browser needed. Read the source.
 
-### 1.2 Verdict shape
+### 1.3 Verdict shape
 
 ```markdown
 ## <TICKET> — <✅ Confirmed | ⚠️ Not reproduced | ⚠️ Partial / Reframe>
@@ -159,7 +187,7 @@ Fix direction:
 - <concrete code change pointers — file:line where possible — that the implementer can act on>
 ```
 
-### 1.3 Synthesize report
+### 1.4 Synthesize report
 
 Write **one** markdown report file at the CWD root, named `<UMBRELLA-or-batch-name>-bug-bash-report.md`. Include:
 
@@ -167,17 +195,17 @@ Write **one** markdown report file at the CWD root, named `<UMBRELLA-or-batch-na
 - Per-ticket sections in the verdict shape above
 - An "Evidence files" footer listing every screenshot you captured
 
-### 1.4 Hard pause — checkpoint
+### 1.5 Hard pause — checkpoint
 
 Use `AskUserQuestion` with these options at minimum:
 
 - **Approve all + proceed to Phase 2** — apply the proposed Jira mutations (close not-reproducible, transition others to In Dev with assignee+Dev Owner = current user), then start fixing
-- **Edit a verdict** — user names which ticket and what to change; loop back to 1.1 for that ticket only
+- **Edit a verdict** — user names which ticket and what to change; loop back to 1.2 for that ticket only
 - **Triage only — stop here** — apply Jira mutations, write nothing further
 
 Show the proposed Jira mutations in the question's preview so the user sees exactly what will change.
 
-### 1.5 Apply Jira mutations (only after approval)
+### 1.6 Apply Jira mutations (only after approval)
 
 Use the auth pattern from memory. Three operations per ticket:
 
