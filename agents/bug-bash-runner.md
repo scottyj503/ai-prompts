@@ -121,6 +121,48 @@ lsof -iTCP:<port> -sTCP:LISTEN || (cd <repo> && pnpm dev > /tmp/<repo>-dev.log 2
 
 Verify it's serving the right branch (current `git branch --show-current` in the repo).
 
+### 0.5 Inject auth cookies into the MCP browser
+
+Reading `prt-main-uix/CLAUDE.md` will tell you to use `playwright/.auth/user.json` for auth — but the **injection method matters**. Per `reference-mcp-auth-cookies`:
+
+- **Don't use `document.cookie = ...`** — Descope's SDK has `secure: true` on the session cookie and silently rejects writes from the document.cookie API when the page is `http://localhost` (non-HTTPS). Symptom: navigation sticks on `Loading configuration...` or bounces back to the Descope login form.
+- **Use `page.context().addCookies(...)`** via `mcp__playwright__browser_run_code_unsafe` instead. Sets cookies at the BrowserContext level — same mechanism Playwright's own `auth.setup.ts` uses.
+
+Recipe:
+
+```bash
+# 1. Refresh tokens (they expire in ~10 min)
+(cd <repo> && pnpm test:int:auth)
+
+# 2. Dump cookies as a Playwright-shaped array
+cat <repo>/playwright/.auth/user.json | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+out = []
+for c in d.get('cookies', []):
+    row = {'name': c['name'], 'value': c['value'], 'domain': c.get('domain', 'localhost'),
+           'path': c.get('path', '/'), 'sameSite': c.get('sameSite', 'Lax'),
+           'secure': bool(c.get('secure', False)), 'httpOnly': bool(c.get('httpOnly', False))}
+    if isinstance(c.get('expires'), (int, float)) and c['expires'] > 0:
+        row['expires'] = c['expires']
+    out.append(row)
+print(json.dumps(out))"
+```
+
+Then paste the JSON into a `browser_run_code_unsafe` snippet:
+
+```js
+async (page) => {
+  const cookies = [/* paste JSON array here */];
+  await page.context().addCookies(cookies);
+  return await page.context().cookies('http://localhost:8090');
+}
+```
+
+`browser_navigate` after this — the app sees a valid session. The MCP harness does NOT have `require`/`fs` available inside `browser_run_code_unsafe`, so dump-and-paste is the workable shape; you can't `readFileSync` from the snippet.
+
+If runtime checks start failing partway through Phase 1 (Descope login appears mid-session), the tokens expired — re-run steps 1–2 + the snippet to refresh. **Don't fall back to `document.cookie`** even when it seems easier.
+
 ---
 
 ## Phase 1 — Verify
@@ -360,6 +402,48 @@ Don't preview every Slack post — the format is canonical. Do report to the use
 Update the TodoWrite list (mark this ticket completed, the next in_progress). Continue to the next ticket. After every 2–3 PRs, briefly summarize progress and offer to pause.
 
 **Batched parallel fixing** (advanced, only on explicit user request): instead of looping sequentially, set up worktrees for N tickets up front and run their full TDD cycles in parallel via subagent fan-out. Higher rebase risk on whichever lands second/third, but ~Nx wall-clock speedup. Same approach we used for the PARTS-{943,946,947} batch and the PARTS-{945,939,947-followup} batch.
+
+### 2.9 Handle review feedback (FF vs same-PR)
+
+When a reviewer leaves comments on an open PR you've shipped, the response shape depends on the review state. Per `feedback-fast-follow-pr-workflow`:
+
+**Same-PR commit** when the PR is `COMMENTED` or `CHANGES_REQUESTED` (not yet approved). Push the fix to the existing branch. Reply to each inline comment with a pointer to the fixing SHA. Example: PARTS-945 PR #237 followed this path — review was COMMENTED with 1 Medium + 1 Trivial; pushed `22797c5` to the same branch, replied per-thread, Scott merged ~20 min later.
+
+**Fast-follow (FF) PR** when the PR is `APPROVED` with non-blocking comments. Don't push more commits onto an approved branch — that re-triggers review. Scott's framing: "Let's address the comments in a FF."
+
+FF recipe:
+
+1. **Branch off the original PR's branch tip** (NOT off master) so you can edit code introduced in the original without resurrecting the diff. Naming: `fix/PARTS-<N>-<short-followup-description>` (e.g. `fix/PARTS-946-aria-describedby-helper`).
+2. **For fix-shape comments**, write a RED test first (per `feedback-fan-out-subagents` TDD discipline). For coverage-add or doc-cleanup comments, skip RED — just add the test/edit.
+3. **Open the FF PR.** While the original is still open, target the original branch as base for a tight diff:
+   ```bash
+   gh pr create --base <original-branch> --head <ff-branch> ...
+   ```
+4. **Deleted-base-branch gotcha** — once the original squash-merges, GitHub deletes the source branch. A `gh pr create --base <deleted-branch>` then fails with the misleading error:
+   > `pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between..., Base ref must be a branch`
+
+   Don't go chasing local SHAs — this means the base was deleted. Recovery:
+   ```bash
+   git fetch origin master
+   git rebase origin/master         # git skips original commits via cherry-pick equivalence
+   git push --force-with-lease
+   gh pr create --base master ...
+   ```
+5. **PR body categorizes the original comments** in a table:
+
+   | Comment | Severity | Status |
+   |---------|----------|--------|
+   | <one-line summary> | Low / Trivial / Medium | Fixed in `<sha>` / Deferred (reason) |
+
+   Defer product-judgement comments (UX questions needing PM input) by name — they're not a code-change FF.
+
+6. **Slack** — post a **threaded reply to the original PR's announcement** in the project channel with `reply_broadcast=true` (the "Also send to channel" checkbox). The thread keeps the conversation linked; the broadcast surfaces it to the channel feed. Form:
+
+   ```
+   Fast-follow [PR #<N>](<url>) addresses the inline review on this one — <one-sentence summary> :thank_you:
+   ```
+
+A typical FF run today: ~30 min from "let's address" to merged. Two confirmed examples on 2026-05-12: PRs #240 (946 a11y FF) and #241 (943 test-coverage FF).
 
 ---
 
