@@ -29,7 +29,7 @@ description: |
   For compliance status questions, use the adr-compliance-reviewer agent.
   </commentary>
   </example>
-model: opus
+model: sonnet
 color: purple
 ---
 

@@ -317,6 +317,22 @@ Generates Terraform infrastructure as code following AWS best practices with pro
 
 ---
 
+### 17. **release-readiness-reviewer**
+Read-only analyst that, given a set of Jira ticket keys, determines exactly what it takes to move them to all environments — which repos, whether each is already live in prod, the Terraform/HCL footprint, and what *else* rides along when shipping `master` HEAD. Returns a verified deploy plan and stops; triggers nothing.
+
+**Use Cases:**
+- "What needs to deploy to get PARTS-XXXX to all envs?"
+- Deciding pending-vs-already-live by comparing the deployed prod SHA to a ticket's PR merge commits
+- Detecting the "shipping master HEAD drags in other tickets" bundle, and real Terraform vs `sherpa.yml` infra changes
+
+**Triggers:** Automatically invoked for ticket-keyed release-readiness / deploy-state / "is this in prod yet" questions. Also the analysis phase of the `/ready-for-launch` command.
+
+**Output:** A deploy-plan report — per-ticket verdict, per-repo mechanism + master/prod SHAs, bundle warnings, Terraform steps, and a recommended sequence.
+
+**Cross-reference:** `/ready-for-launch` executes this plan with human approval gates. Distinct from `deployment-pipeline-orchestrator` (Port.io, single-stack, auto-approve).
+
+---
+
 ## Available Skills
 
 Skills are expert consultants that run inline (not as subagents). They provide guidance, review, and troubleshooting without generating full project scaffolds.
@@ -377,6 +393,7 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/figma-extract <figma-url>` | Extract Figma design specs (frames, components, tokens) for offline analysis |
 | `/getLatestClaudeReleaseNotes [version]` | Fetch the latest Claude Code release notes from GitHub |
 | `/bug-bash <TICKET-KEY> [TICKET-KEY ...]` | Kick off a bug-bash verification run on a list of Jira tickets (or a single umbrella key) using the bug-bash-runner agent |
+| `/ready-for-launch <TICKET-KEY> [TICKET-KEY ...]` | Move a set of Jira tickets to all envs (QA→STAGE→PROD→DEMO) via Harness — analyze with release-readiness-reviewer, confirm, promote/deploy + Terraform with human gates, then comment + close + announce in #parts_qa |
 
 ---
 
