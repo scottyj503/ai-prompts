@@ -1,6 +1,6 @@
 ---
 name: lambda-performance-reviewer
-description: Specialized performance reviewer for Java Quarkus applications running in AWS Lambda. Focuses on cold start optimization, native image readiness, memory sizing, and Lambda-specific patterns.
+description: Specialized performance reviewer for Java Quarkus applications running in AWS Lambda. Focuses on cold start optimization, SnapStart checkpoint priming, post-restore connection lifecycle, honest error semantics under throttling, native image readiness, memory sizing, and Lambda-specific patterns.
 tools: Read, Glob, Grep, Bash
 model: sonnet
 color: orange
@@ -86,6 +86,23 @@ Key log queries:
 - OOM occurrences (`Runtime exited with error: signal: killed`)
 - Error patterns from application logs
 
+**SnapStart-specific queries** (if the function uses SnapStart — REPORT lines carry `Restore Duration` instead of `Init Duration`):
+
+Split first-invoke-after-restore from warm invocations — this is where SnapStart functions hide their cold-start tax:
+
+```
+filter @type = "REPORT"
+| parse @message "Restore Duration: * ms" as restoreMs
+| stats count(*) as n, avg(@duration), pct(@duration,50), pct(@duration,95), pct(@duration,99), max(@duration),
+        avg(restoreMs), pct(restoreMs,99) by ispresent(restoreMs) as postRestore
+```
+
+Healthy reference points (measured in DEV after remediation): first-after-restore p95 ~390-410ms / p99 ~760-1020ms vs warm p50 5-20ms. A first-after-restore p95 near or above 800ms, or any multi-second p99, indicates the hot path is not in the snapshot (see Step 5 priming checklist).
+
+If the service registers CRaC restore hooks that log timings (e.g., `[RESTORE:OPENSEARCH] Connection re-established in {}ms`), parse and aggregate them — a p50 above ~500ms or a bimodal distribution points at connection-establishment stalls, not application code.
+
+When comparing before/after a deploy, bin stats by day (`by bin(1d)`) — aggregate windows that straddle a deploy mask the step change. Also beware single-day anomalies: a burst load test forcing hundreds of concurrent restores will skew a whole week's percentiles; check hourly distribution before concluding a regression.
+
 **X-Ray Traces** (if X-Ray is enabled):
 
 ```bash
@@ -135,6 +152,16 @@ This is the highest-impact area for Lambda Java performance. If runtime data is 
 - Flag use of `java.util.Random` (not SnapStart-safe; need `SecureRandom`)
 - Verify no file handles or sockets are held across checkpoint
 
+**SnapStart checkpoint priming (the highest-leverage SnapStart check):**
+
+A SnapStart snapshot only contains what executed *before* the checkpoint. If the hot request path never runs pre-checkpoint, every restored environment pays classloading + JIT + JWT/JWKS validation + TLS handshakes + lazy CDI/SDK-client init on its first real request — typically 0.5–2.5s on top of a query that itself takes 10–45ms. Checklist:
+
+1. **Prime-path present and pointing at the actual hot endpoint.** Look for `snapstart.primer.jwt.prime-path` (or equivalent primer config) in `application.properties`. The primer should drive one real authenticated request through the full stack at checkpoint time: JAX-RS dispatch, JWT filter chain, query-DSL serialization, SigV4 signing, downstream TLS connect, and result hydration. Priming `GET /` or a health endpoint is nearly worthless — flag it. (Reference: priming the real search path cut first-after-restore p95 from ~800ms to ~390ms; a service priming the wrong endpoint sat at p95 2.2s.)
+2. **Seed data for the primed path must be permanent.** If the prime-path references seeded test data, verify that data has no TTL — TTL-expired seed rows silently degrade the prime to a 404 path and nobody notices. Prefer a dedicated permanent seed row over integration-test-prefixed data that reaper jobs or `IntegTestTtl` attributes clean up. The primed request should return ≥1 result so hydration branches (e.g., DynamoDB batch-get after a search) are also warmed.
+3. **Startup ordering can silently disable priming.** If the service imports certificates or does other TLS setup at startup, it must run *before* the primer (e.g., `@Observes @Priority(1) StartupEvent`, not `@Startup @PostConstruct` which gives no ordering guarantee). Symptom in INIT logs: `[PRIMER:JWT] Failed to prime ... PKIX path building failed` at every checkpoint — priming config present but never working. Grep checkpoint-phase logs for primer failures; they are usually WARN-only and easy to miss.
+4. **Priming outcome must be observable.** Look for an info contributor (`/q/info`) exposing the prime-path and a machine-checkable outcome probe (e.g., "did the priming token get written"). If the endpoint is unauthenticated, any IDs embedded in the prime-path must be redacted **fail-closed** — omit the value when the redaction pattern doesn't match, never publish it unredacted.
+5. **X-Ray/OTel priming.** If tracing initializes lazily on the first traced request, enable primer support for it (e.g., `snapstart.primer.xray.enabled=true`) or the first request still pays that init.
+
 ### Step 6: Memory and Resource Analysis
 
 If runtime data is available from Step 4, compare `MaxMemoryUsed` to configured memory:
@@ -150,8 +177,23 @@ If runtime data is available from Step 4, compare `MaxMemoryUsed` to configured 
 **Connection management:**
 - Verify DynamoDB/S3/SQS clients are created once (static or CDI singleton), not per-request
 - Check for RDS/JDBC — flag missing connection pooling or pooling configured for long-lived servers (HikariCP max-pool-size too high for Lambda)
-- Verify HTTP clients are reused, not created per-invocation
+- Verify HTTP clients are reused, not created per-invocation — a per-call `OkHttpClient`/`HttpClient` builder in a request path is a Critical finding: fresh DNS + TCP + TLS per call, and OkHttp's 10s default timeout turns network blips into 10s request stalls. Require explicit connect/read timeouts on every client.
 - Flag SDK clients with custom HTTP configurations that disable connection reuse
+
+**Post-restore connection lifecycle (SnapStart services):**
+- TCP/TLS connections do NOT survive a snapshot. Every pooled client (OpenSearch, HTTP, JDBC) needs an `afterRestore` hook that rebuilds or re-primes connections, and warm-up work should run in *both* `beforeCheckpoint` (so classes/JIT are in the snapshot) and `afterRestore` (so connections are live).
+- CRaC pitfall: `org.crac`'s global context holds registered Resources **weakly** until beforeCheckpoint — if the producer doesn't retain the hook in a field, it can be GC'd and afterRestore silently never runs. Look for a guard test pinning retention.
+- Warmup/restore hooks must be try/catch-wrapped so they can never fail a checkpoint or restore.
+- Watch for wrapped-client leak patterns: e.g., OpenSearch `AwsSdk2Transport.close()` is a no-op — the underlying `SdkHttpClient` must be closed explicitly on rebuild or every restore leaks a pool.
+
+**Connection pool tuning (learned the hard way):**
+- `connectionTimeToLive` on a steadily-used pool *manufactures* reconnect stalls — it recycles healthy sockets on schedule. Prefer `connectionMaxIdleTime` alone (idle eviction also handles checkpoint-dead sockets, whose timestamps predate the restore).
+- For VPC-internal dependencies, a low connect timeout (~400ms) plus exactly one retry beats a 2s+ timeout: a connect timeout means nothing was written, so the retry is safe even for non-idempotent operations. Never retry on `SocketTimeoutException` (request already sent); beware exception hierarchies (`ConnectionPoolTimeoutException extends ConnectTimeoutException` but means pool saturation, not a dead peer).
+- Recommend logging new-connection establishment timing (e.g., a timing socket factory) so connect cost is attributable in CloudWatch instead of invisible inside SDK internals.
+
+**DynamoDB access patterns:**
+- Flag Query-on-partition + `FilterExpression` where the filter selects a tiny known subset (e.g., "the default item") — on a large partition this pages serially to return one row. A **sparse GSI** (marker attribute written only on the flagged item, so the index holds ≤1 row per partition) converts it to a single-page indexed lookup. Reference: 6 serial pages / 15K items scanned → ~10-15ms single-page query. Remember the backfill-before-cutover ordering and verify the ORM omits null marker attributes from writes (sparse-index correctness).
+- Flag soft-delete accumulation in read paths: tombstone rows amplify every list/scan (observed 19× read amplification — 1,558 of 1,644 rows dead). If the source table can't change, a read-projection kept fresh by domain events (CQRS) with hard deletes is the structural fix.
 
 **SDK usage:**
 - Prefer AWS SDK v2 over v1 (lighter, async support)
@@ -165,6 +207,19 @@ If runtime data is available from Step 4, compare `MaxMemoryUsed` to configured 
 - Flag logging verbosity in hot paths (structured logging with minimal allocation)
 - Check for unnecessary serialization/deserialization round-trips
 - Verify error handling doesn't swallow exceptions silently (Lambda needs to know about failures for retry/DLQ)
+
+**Error semantics under dependency stress (load-test honesty):**
+
+Throttling and timeouts from downstream dependencies must surface as *retryable* errors. Under DynamoDB write throttling, common failure modes are:
+- `TransactionCanceledException` cancellation reasons collapsed into the nearest semantic error — throttling reported as 400 "duplicate" or 409 "conflict", which callers can misread as "the write happened" when nothing was written (data-integrity-adjacent, worst case)
+- SDK `ApiCallTimeoutException` surfacing as generic 500 `UNEXPECTED_ERROR`
+
+What to verify:
+- Every `transactWriteItems` catch site inspects cancellation reasons: throttling codes (`ThrottlingError`, `ProvisionedThroughputExceeded`, `RequestLimitExceeded`) and `TransactionConflict` → retryable **503**; genuine `ConditionalCheckFailed` keeps its existing semantic response byte-for-byte. A reported ConditionalCheckFailed means that condition genuinely evaluated, regardless of other reasons in the same transaction — so run the transient-fault guard *first* in each catch block, then fall through to semantic handling.
+- `ApiCallTimeoutException` and `ApiCallAttemptTimeoutException` both have mappers — they are *siblings*, not parent/child; a mapper for one does not catch the other.
+- SDK `apiCallTimeout` is sized for the workload (a 5s write timeout under throttling bursts = spurious 500s; attempt timeout can stay tight).
+- 503 responses are documented in OpenAPI for the affected write endpoints.
+- Concurrency-burst integration tests exist (latch-synchronized bursts asserting every response is success-or-503, never 400/409/500). Size bursts to trip contention without saturating the test stack's Lambda concurrency — oversized bursts cause collateral failures in unrelated tests.
 
 **Quarkus-specific patterns:**
 - Check `quarkus.lambda.handler` configuration matches actual handler
@@ -242,6 +297,7 @@ _Omit this section if runtime data was not available._
 - Duration: avg [X]ms / p99 [Y]ms / max [Z]ms
 - Cold start frequency: [N]% of invocations
 - Cold start init duration: avg [X]ms / max [Y]ms
+- SnapStart (if applicable): restore duration avg [X]ms / p99 [Y]ms; first-invoke-after-restore p50/p95/p99 [X/Y/Z]ms vs warm p50 [W]ms
 - Memory: configured [X]MB / avg used [Y]MB / max used [Z]MB ([utilization]%)
 - Errors: [rate]% / Throttles: [count]
 - X-Ray: [enabled/not enabled] — [key subsegment findings]

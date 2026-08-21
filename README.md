@@ -198,10 +198,14 @@ Specialized performance reviewer for Java Quarkus applications running in AWS La
 
 **Use Cases:**
 - Cold start optimization (init phase weight, extension audit, native image readiness, SnapStart)
+- SnapStart checkpoint priming audit (prime-path targets the hot endpoint, permanent seed data, startup ordering, fail-closed redaction, priming outcome probes)
+- Post-restore connection lifecycle (CRaC hooks, weak-reference retention pitfalls, pool TTL tuning, safe connect-retry patterns)
+- Honest error semantics under throttling (DynamoDB transactWriteItems cancellation-reason inspection → retryable 503, not 400/409/500)
+- DynamoDB access patterns (sparse GSI vs partition scan+filter, tombstone read-amplification)
 - Memory right-sizing based on live CloudWatch metrics
 - SDK usage audit (v1 vs v2, connection reuse, async clients)
 - X-Ray instrumentation assessment (infra + application + downstream coverage)
-- Live observability via CloudWatch metrics, Logs Insights, and X-Ray traces
+- Live observability via CloudWatch metrics, Logs Insights (incl. first-invoke-after-restore percentile splits), and X-Ray traces
 
 **Triggers:** Dispatched when reviewing Lambda-deployed Java services. Accepts optional SSO profile and Lambda ARN for live data.
 
@@ -209,7 +213,23 @@ Specialized performance reviewer for Java Quarkus applications running in AWS La
 
 ---
 
-### 11. **security-reviewer**
+### 11. **node-lambda-performance-reviewer**
+Specialized performance reviewer for Node.js/TypeScript Lambda functions (AppSync resolvers, BFFs, event consumers). Distilled from the M10 load-test remediation (PARTS-1455): on Node Lambdas, cold-start cost is dominated by bytes of JavaScript parsed at init, so bundle composition is the highest-leverage review target.
+
+**Use Cases:**
+- Bundle composition audit (barrel imports vs subpath imports of exports-map libraries, esbuild metafile analysis, accidental heavyweight payloads, `moduleResolution: bundler` correctness)
+- Auth-token lifecycle under concurrency (singleton helpers, init-time prefetch, expiry buffer, SigV4 nonce/signature-replay 401s)
+- Observability tax (ADOT layer parse cost vs instrumentation activation, in-process lite-SDK tracing, bootstrap import ordering, flush-on-return/throw, presigned-URL credential-leak checks)
+- Self-enforcing guardrails (ESLint barrel bans, packaging/build-output contract tests, calibrated cold-start budget tests)
+- Live init-duration verification via Logs Insights with day-binned before/after deploy comparison
+
+**Triggers:** Dispatched when reviewing Lambda-deployed Node/TypeScript services. Accepts optional SSO profile and function name for live data.
+
+**Output:** Bundle assessment with size budgets, auth/observability findings, runtime init-duration stats (when live data available), and PASS/FAIL verdict.
+
+---
+
+### 12. **security-reviewer**
 Reviews code for security vulnerabilities, OWASP Top 10 issues, and security best practices.
 
 **Use Cases:**
@@ -225,7 +245,7 @@ Reviews code for security vulnerabilities, OWASP Top 10 issues, and security bes
 
 ---
 
-### 12. **tech-design**
+### 13. **tech-design**
 Creates comprehensive technical design documentation for AWS serverless applications following a Technical Review Checklist.
 
 **Use Cases:**
@@ -241,7 +261,7 @@ Creates comprehensive technical design documentation for AWS serverless applicat
 
 ---
 
-### 13. **qa-testing-agent**
+### 14. **qa-testing-agent**
 Guides testers through the complete QA lifecycle — from story intake through test execution, results formatting, and Jira posting.
 
 **Use Cases:**
@@ -257,7 +277,7 @@ Guides testers through the complete QA lifecycle — from story intake through t
 
 ---
 
-### 14. **routing-agent**
+### 15. **routing-agent**
 SDLC orchestration agent that coordinates the complete software development lifecycle — planning, implementation, review, and delivery.
 
 **Use Cases:**
@@ -272,7 +292,7 @@ SDLC orchestration agent that coordinates the complete software development life
 
 ---
 
-### 15. **bug-bash-runner**
+### 16. **bug-bash-runner**
 Two-phase agent for batched bug triage and fixing. Drives verification in MCP (Playwright or Chrome DevTools), pauses for human direction, then runs per-ticket TDD with runtime green-check.
 
 **Use Cases:**
@@ -296,7 +316,7 @@ Two-phase agent for batched bug triage and fixing. Drives verification in MCP (P
 
 ---
 
-### 16. **terraform-agent**
+### 17. **terraform-agent**
 Generates Terraform infrastructure as code following AWS best practices with proper state management, security, and testing.
 
 **Use Cases:**
@@ -317,7 +337,7 @@ Generates Terraform infrastructure as code following AWS best practices with pro
 
 ---
 
-### 17. **release-readiness-reviewer**
+### 18. **release-readiness-reviewer**
 Read-only analyst that, given a set of Jira ticket keys, determines exactly what it takes to move them to all environments — which repos, whether each is already live in prod, the Terraform/HCL footprint, and what *else* rides along when shipping `master` HEAD. Returns a verified deploy plan and stops; triggers nothing.
 
 **Use Cases:**
@@ -616,7 +636,8 @@ export JIRA_BASE_URL="your-company.atlassian.net"
 | "Review my code quality" | code-quality-reviewer | Agent |
 | "Does this code do what was asked?" | functional-reviewer | Agent |
 | "Check for performance issues" | performance-reviewer | Agent |
-| "Review Lambda cold start performance" | lambda-performance-reviewer | Agent |
+| "Review Lambda cold start performance (Java)" | lambda-performance-reviewer | Agent |
+| "Review Lambda cold start performance (Node)" | node-lambda-performance-reviewer | Agent |
 | "Check for security vulnerabilities" | security-reviewer | Agent |
 | "Check ADR compliance" | adr-compliance-reviewer | Agent |
 | "Full PR review (all dimensions)" | /review | Command |
@@ -727,6 +748,10 @@ allowed-tools: Bash(git:*), Read, Glob
 **Solution**: Ensure the `.md` file is in the `commands/` directory (project-level or user-level) and has a valid `description` in the frontmatter.
 
 ## Version History
+
+- **v6.2 (2026-08)**: Lambda performance reviewers upgraded from M10 load-test remediation (PARTS-1455)
+  - Added `node-lambda-performance-reviewer` agent — Node/TypeScript Lambda sibling of the Java reviewer. Bundle-composition audit (barrel vs subpath imports of exports-map libs, esbuild metafile, `moduleResolution: bundler`), auth-token lifecycle under concurrency (singleton + init prefetch + expiry buffer + SigV4 nonce replay), observability tax (ADOT layer parse vs activation, in-process lite-SDK tracing checklist, credential-leak checks), and self-enforcing guardrails (lint bans, packaging/bundle contract tests, calibrated cold-start budgets). Includes a measured cold-start calibration table.
+  - Upgraded `lambda-performance-reviewer` (Java) — SnapStart checkpoint-priming checklist (prime the real hot endpoint, permanent seed data, `@Priority(1)` startup ordering, fail-closed redaction, priming outcome probes), post-restore connection lifecycle (CRaC weak-ref pitfall, no-op close() leaks, TTL-manufactured stalls, 400ms connect + safe single retry), honest error semantics under DynamoDB throttling (cancellation-reason guard → retryable 503), sparse-GSI and tombstone-amplification patterns, and Logs Insights queries splitting first-invoke-after-restore percentiles with day-binned before/after comparison.
 
 - **v6.1 (2026-05)**: Bug-bash hardening from real-world use
   - **Worktree warmup added to Phase 2.1** — env file copy (`.env`, `.env.local.test`), `refresh_codeartifact_token`, `pnpm i`, `pnpm build`. Prevents the `--no-verify` trap where the pre-commit hook's `test:int` couldn't reach GraphQL.

@@ -25,21 +25,21 @@ https://github.com/fullbay/prt-main-uix/pull/408
 // REACT
 
 Changes have been made:
-https://github.com/fullbay/prt-main-uix/pull/418
+https://github.com/fullbay/prt-main-uix/pull/424
 
 
   and the:
-  PARTS-1524-PLAN.md
+  PARTS-1525-PLAN.md 
 
-  has been udpated.
+  has been udpated. Please review for any new discoverys/observations prior. 
 
   Let's read the plan and updates and get the diff, to verify that we have met the Stories description/AC.
-  Test Using Playwright MCP (see claude.md for auth) and verify
+  Verify/confirm Using Playwright MCP
 
   Take the diff and use the code-quality-reviewer, react-mf-expert, adr-compliance-reviewer, security-reviewer, performance-reviewer and functional-reviewer
 
   Create a new Section "Code Review" in the
-  PARTS-1524-PLAN.md
+  PARTS-1525-PLAN.md 
   and put any relevant comments/observations
 
   fan out subagents as needed.
@@ -47,21 +47,25 @@ https://github.com/fullbay/prt-main-uix/pull/418
 
 
 Changes have been made:
-https://github.com/fullbay/prt-purchase-orders-svc/pull/172
+https://github.com/fullbay/idp-opensearchclient-lib/pull/4
 
   and the:
-PARTS-1546-TDD-PLAN.md
 
-  has been udpated.
+  PARTS-1564-PLAN.md
+
+  has been udpated. Please review for any new discoverys/observations prior. 
 
   Let's read the plan and get the diff, to verify that we have met the Stories description/AC.
 
   Take the diff and use the code-quality-reviewer, adr-compliance-reviewer, security-reviewer, java-quarkas-agent, performance-reviewer and functional-reviewer
 
   Create a new Section "Code Review" in the
-PARTS-1546-TDD-PLAN.md
 
-  and put any relevant comments/observations
+  PARTS-1564-PLAN.md
+
+  and put any relevant comments/observations in that section.  
+  Be sure to disply the output from each agent 
+
 
   fan out subagents as needed.
 
@@ -133,6 +137,7 @@ changes have been made, let's verify that they satisfy the Description/AC : http
   fan out subagents
 
  Lets analyze and create a Plan/TODO's in a markdown file, this will be used by another claude session running sonnet.
+ Lets analyze and create a Plan/TODO's in a markdown file, this will be used by another claude session running Opus 5.
 
   Include in the plan:
   create a git branch
@@ -298,6 +303,41 @@ Wait for the token — it's single-use with a ~2 min TTL, so generate immediatel
 
 Step 3 — Navigate to your target URL (plain, no ?t=):
 http://localhost:8090
+The DS/DSR cookies persist for the session (~12h on DSR). No re-auth needed across navigations.
+
+Why the URL approach fails: the descope-wc component on this app uses flow-id=sign-up-or-in-multiple-tenant, which doesn't auto-handle the t query param. Calling sdk.magicLink.verify() directly bypasses the flow and writes the session cookies.
+
+// STAGE
+Playwright STAGE Auth for platform.stage.fullbay.com
+
+The ?t=TOKEN URL approach in the PLAYWRIGHT-STAGE-AUTH.md does not work with the sign-up-or-in-multiple-tenant flow — the Descope component never intercepts the parameter. Use this 3-step sequence instead:
+
+Step 1 — Generate a token (Bash tool):
+STAGE_PROJECT_ID="P3A4p3XFtTZPcarBYCp6NsCU8KZn"
+MGMT_KEY=$(grep DESCOPE_MANAGEMENT_KEY /Users/scottjones/code/fb-parts/prt-main-uix/.env.local.test | cut -d= -f2)
+TOKEN=$(curl -s \
+  -X POST "https://api.descope.com/v1/mgmt/user/signin/embeddedlink" \
+  -H "Authorization: Bearer ${STAGE_PROJECT_ID}:${MGMT_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"loginId\": \"scott.jones@fullbay.com\", \"customClaims\": {}}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+echo "$TOKEN"
+
+Step 2 — Navigate to STAGE (any page) and call magicLink.verify directly (browser_evaluate):
+async () => {
+  const el = document.querySelector('descope-wc');
+  const result = await el.sdk.magicLink.verify('PASTE_TOKEN_HERE');
+  if (!result.ok) return 'verify failed: ' + JSON.stringify(result);
+  const { sessionJwt, refreshJwt, cookieMaxAge } = result.data;
+  const expires = new Date(Date.now() + cookieMaxAge * 1000).toUTCString();
+  document.cookie = `DS=${sessionJwt}; path=/; SameSite=Strict; expires=${expires}`;
+  document.cookie = `DSR=${refreshJwt}; path=/; SameSite=Strict; expires=${new Date(Date.now() + 12*60*60*1000).toUTCString()}`;
+  return 'cookies set: ' + document.cookie.includes('DS=');
+}
+Wait for the token — it's single-use with a ~2 min TTL, so generate immediately before this step.
+
+Step 3 — Navigate to your target URL (plain, no ?t=):
+https://platform.stagefullbay.com/parts
 The DS/DSR cookies persist for the session (~12h on DSR). No re-auth needed across navigations.
 
 Why the URL approach fails: the descope-wc component on this app uses flow-id=sign-up-or-in-multiple-tenant, which doesn't auto-handle the t query param. Calling sdk.magicLink.verify() directly bypasses the flow and writes the session cookies.
