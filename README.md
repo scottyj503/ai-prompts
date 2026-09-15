@@ -6,11 +6,13 @@ A collection of specialized AI agents, expert skills, and workflow commands for 
 
 This repository contains production-ready extensions that enhance Claude Code's capabilities for AWS serverless development, React micro-frontends, Java/Quarkus applications, infrastructure-as-code, technical design, gap analysis, and Jira story creation.
 
-The extensions are organized into three categories:
+The extensions are organized into five categories:
 
 - **Agents** — Autonomous subprocesses that scaffold projects, analyze codebases, and generate artifacts
 - **Skills** — Expert consultants invoked inline for code review, architecture guidance, and troubleshooting
 - **Commands** — Slash commands (`/command-name`) for common workflow tasks like fetching Jira issues, creating PRs, and reviewing code
+- **Workflows** — JavaScript orchestration scripts run by Claude Code's Workflow tool for deterministic multi-agent fan-out (see [Workflow Scripts & Knowledge](#workflow-scripts--knowledge))
+- **Knowledge** — Reference checklists that agents read at dispatch time
 
 ## Feature Analysis Pipeline
 
@@ -353,6 +355,21 @@ Read-only analyst that, given a set of Jira ticket keys, determines exactly what
 
 ---
 
+### 19. **data-side-effects-reviewer**
+Reviews changes for blast radius on already-persisted or already-migrated data. Adopted from [srhoton/dotfiles PR #53](https://github.com/srhoton/dotfiles/pull/53).
+
+**Use Cases:**
+- Hash / sourceHash / checksum / idempotency-key / dedup-key / ID-derivation changes that would re-key or re-flag existing records
+- Unguarded status or flag overwrites (no condition expression, no read-compare)
+- Schema or version bumps whose companion artifacts (JSON schema files, fixtures, contracts) were not updated in the same change
+- Re-run and backfill safety of migration and transform code
+
+**Triggers:** Dispatched by the `/review1` workflow. Returns zero findings when the change touches no persistence, identity, status, or schema surface.
+
+**Output:** Findings describing what changes for existing data, the blast radius, and how to fix it. PASS/FAIL verdict when run standalone.
+
+---
+
 ## Available Skills
 
 Skills are expert consultants that run inline (not as subagents). They provide guidance, review, and troubleshooting without generating full project scaffolds.
@@ -395,7 +412,8 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/get-jira <issue-key>` | Fetch Jira issue details (summary, description, status, priority) |
 | `/getConfluencePage <page-id\|url\|title>` | Fetch and render a Confluence page as markdown (optional `--prompt` for analysis) |
 | `/getPRComments <pr-number>` | Fetch GitHub PR comments and analyze codebase in context (optional `--author` filter) |
-| `/review <pr-number>` | Run five parallel reviewers (functional, quality, performance, security, ADR) on a PR and submit a GitHub review with inline comments |
+| `/review <pr-number>` | Run four parallel reviewers (functional, quality, performance, security) on a PR via hand-dispatched Agent calls and submit a GitHub review with inline comments |
+| `/review1 <pr-number> [--out <path>] [--no-post]` | Run six reviewers (the four above + ADR + data-side-effects) via the `review1-fanout` Workflow script, adversarially verify each CRITICAL/HIGH finding with a skeptic agent, then submit a GitHub review. `--out` writes the full review (frontmatter + every finding, verification, and refutation) to a markdown file; `--no-post` stops there without touching GitHub, for reviewing your own PRs into a file another process consumes. Requires the Workflow tool; falls back to telling you to run `/review` |
 | `/codereview <pr-number>` | Pull down a PR and run the code-quality-reviewer agent on it |
 | `/codeReviewUpdate <commit-sha>` | Re-review after changes have been made to a PR |
 | `/create-pr` | Add, commit, push, and create a pull request via GitHub CLI |
@@ -414,6 +432,48 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/getLatestClaudeReleaseNotes [version]` | Fetch the latest Claude Code release notes from GitHub |
 | `/bug-bash <TICKET-KEY> [TICKET-KEY ...]` | Kick off a bug-bash verification run on a list of Jira tickets (or a single umbrella key) using the bug-bash-runner agent |
 | `/ready-for-launch <TICKET-KEY> [TICKET-KEY ...]` | Move a set of Jira tickets to all envs (QA→STAGE→PROD→DEMO) via Harness — analyze with release-readiness-reviewer, confirm, promote/deploy + Terraform with human gates, then comment + close + announce in #parts_qa |
+
+---
+
+## Workflow Scripts & Knowledge
+
+Two directories support `/review1` and are intended to grow.
+
+### `workflows/`
+
+Plain JavaScript scripts executed by Claude Code's built-in **Workflow** tool. They are not Node modules: the tool injects `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()`, `args`, and `budget` as globals, and runs the body inside an async function. Load the `workflow-authoring` skill (`/workflow-authoring`) before editing one; the API is specific enough that mistakes surface as silent `null` results rather than errors.
+
+| Script | Purpose |
+|--------|---------|
+| `review1-fanout.js` | Six specialist reviewers in parallel with schema-validated findings, dedup by `file:line` with source merging, then one skeptic agent per CRITICAL/HIGH finding (cap 10) returning `CONFIRMED`, `REFUTED`, or `DOWNGRADE`. Returns `{ actionable, informational, refuted, reviewersSkipped, verify }`. |
+
+`review1-fanout.js` args (passed by `/review1` as a JSON object):
+
+| Arg | Required | Meaning |
+|-----|----------|---------|
+| `repoRoot` | yes | Absolute path of the checked-out repo |
+| `files` | yes | Changed-file paths relative to `repoRoot`; the reviewers' entire scope |
+| `intent` | yes | PR title + body, treated as the user's requirements |
+| `diffPath` | no | Absolute path to a file holding `gh pr diff` output; reviewers read it first. A path, not the text — large content must never travel through tool-call args, or the orchestrating model substitutes a placeholder |
+| `skepticModel` | no | Model for Verify-phase skeptics. Omit to inherit the session model, so different models can be compared across runs |
+| `skepticEffort` | no | Reasoning effort for skeptics (`low` … `max`). Omit to inherit |
+| `scopeNote` | no | Replaces the default scope-bounds paragraph |
+
+Design notes, decided when porting from srhoton/dotfiles PR #53:
+- Reviewers take their model from agent frontmatter (Opus, Sonnet for ADR). Skeptics inherit the session unless overridden.
+- One skeptic per finding, not a majority vote. Its job is to stop one over-reporting reviewer from driving bad fixes; the human selection step in `/review1` is the second vote.
+- A `DOWNGRADE` verdict moves a real-but-minor finding to informational rather than discarding it. Refuted findings are always displayed for spot-checking, never posted.
+- No per-agent verdict: judgment is per-finding. The review action defaults to "Comment" regardless of findings, so the developer can fix or refute; a verified CRITICAL prints a nudge toward "Request changes" but does not change the default.
+- CRITICAL, HIGH, and MEDIUM findings are pre-selected for posting; LOW is opt-in. MEDIUM is not skeptic-verified and is labeled as such in the selection list.
+- When CRITICAL/HIGH findings exceed the cap, the ones verified first are those more reviewers agreed on.
+
+### `knowledge/`
+
+Reference files agents read at dispatch time.
+
+| File | Purpose |
+|------|---------|
+| `defect-classes.md` | Red-team checklist of eight defect classes that fix rounds tend to introduce (fail-open defaults, unconditioned overwrites, serializer allow-list drops, stale literals, vacuous assertions, lockfile/package-manager mismatches, unverified-404 deletion, warn-log amplification). The functional and data-side-effects reviewers check every diff against it. Each entry's **History** line is a placeholder: record the first Fullbay incident that confirms the class, and append new classes when a review round confirms one. |
 
 ---
 
@@ -440,6 +500,21 @@ cp agents/*.md ~/.claude/agents/
 cp commands/*.md ~/.claude/commands/
 cp skills/*.md ~/.claude/skills/
 ```
+
+### Symlinks (Recommended for a Single Machine)
+
+Symlinking keeps `~/.claude` in sync with this repo without re-copying. Agents, commands, and skills are linked per file; `workflows/` and `knowledge/` are linked as whole directories because the paths inside `/review1` reference them as `~/.claude/workflows/...` and `~/.claude/knowledge/...`.
+
+```bash
+REPO=$(pwd)
+for f in agents/*.md;   do ln -sf "$REPO/$f" ~/.claude/agents/;   done
+for f in commands/*.md; do ln -sf "$REPO/$f" ~/.claude/commands/; done
+for f in skills/*.md;   do ln -sf "$REPO/$f" ~/.claude/skills/;   done
+ln -sfn "$REPO/workflows" ~/.claude/workflows
+ln -sfn "$REPO/knowledge" ~/.claude/knowledge
+```
+
+Note: Claude Code loads the agent registry at session start. A newly linked agent is not available to the Workflow tool until a new session begins; `review1-fanout.js` logs it under `reviewersSkipped` rather than failing.
 
 ## Usage
 
@@ -575,13 +650,37 @@ User: "Now analyze gaps against the design"
 ```
 /review 42
   -> Checks out PR, fetches diff
-  -> Dispatches 5 reviewers in parallel:
+  -> Dispatches 4 reviewers in parallel via Agent calls:
      functional-reviewer, code-quality-reviewer,
-     performance-reviewer, security-reviewer, adr-compliance-reviewer
+     performance-reviewer, security-reviewer
   -> Aggregates and deduplicates findings
   -> Presents severity-grouped checklist for user approval
   -> Submits atomic GitHub review with inline comments
 ```
+
+### Verified PR Review Pipeline (Workflow)
+
+```
+/review1 42
+  -> Checks out PR, fetches diff, records repo root
+  -> Invokes Workflow: ~/.claude/workflows/review1-fanout.js
+       Review phase (parallel, schema-validated findings):
+         functional-reviewer, code-quality-reviewer, performance-reviewer,
+         security-reviewer, adr-compliance-reviewer, data-side-effects-reviewer
+         (functional + data-side-effects also check ~/.claude/knowledge/defect-classes.md)
+       Dedup by file:line, merge sources, keep highest severity
+       Verify phase: one skeptic per CRITICAL/HIGH finding (cap 10)
+         -> CONFIRMED (actionable) | REFUTED (shown, never posted) | DOWNGRADE (informational)
+  -> Displays actionable / informational / refuted sections
+  -> [--out <path>]  Writes the full report (YAML frontmatter + A1…/I1…/R1… findings)
+  -> [--no-post]     Stops here — file only, nothing posted
+  -> Presents checklist (CRITICAL/HIGH/MEDIUM pre-selected); review action defaults to Comment
+  -> Submits atomic GitHub review with inline comments; updates the report's Posting Record
+```
+
+Own-PR pattern: `/review1 42 --out ~/reviews/ --no-post` writes `~/reviews/review-PR42.md`, which a later session or worktree process can read and act on. Finding numbers in the file match the terminal display and the Step 5 selection list.
+
+Dry-run baseline on an 8-file PR: 16 agents, 7–13 minutes, 0.6–0.9M subagent tokens.
 
 ---
 
@@ -748,6 +847,14 @@ allowed-tools: Bash(git:*), Read, Glob
 **Solution**: Ensure the `.md` file is in the `commands/` directory (project-level or user-level) and has a valid `description` in the frontmatter.
 
 ## Version History
+
+- **v7.0 (2026-09)**: Workflow-orchestrated PR review, ported from [srhoton/dotfiles PR #53](https://github.com/srhoton/dotfiles/pull/53)
+  - Added `/review1` command — six reviewers via the Workflow tool with schema-validated findings, `file:line` dedup, and an adversarial Verify phase (one skeptic per CRITICAL/HIGH finding returning CONFIRMED / REFUTED / DOWNGRADE). `--out <path>` writes the full review to markdown with YAML frontmatter; `--no-post` stops there for own-PR review files. Workflow-only; points at `/review` when the tool is unavailable. `/review` is unchanged as the comparison baseline.
+  - Added `workflows/review1-fanout.js` — the orchestration script. Skeptics inherit the session model by default (`skepticModel` / `skepticEffort` args override) so models can be compared across runs. No per-agent verdict; review action defaults to Comment so developers can refute, with a nudge when a verified CRITICAL exists. CRITICAL/HIGH/MEDIUM pre-selected for posting.
+  - Added `data-side-effects-reviewer` agent — blast radius on already-persisted data (re-keying, unguarded status overwrites, schema bumps without companion artifacts, backfill safety). Adopted verbatim.
+  - Added `knowledge/defect-classes.md` — eight fix-round defect-class heuristics checked by the functional and data-side-effects reviewers. History lines are placeholders for Fullbay incidents.
+  - New `workflows/` and `knowledge/` directories are symlinked into `~/.claude` as whole directories; documented under Installation.
+  - README correction: `/review` runs four reviewers, not five — ADR compliance was never in its dispatch list.
 
 - **v6.2 (2026-08)**: Lambda performance reviewers upgraded from M10 load-test remediation (PARTS-1455)
   - Added `node-lambda-performance-reviewer` agent — Node/TypeScript Lambda sibling of the Java reviewer. Bundle-composition audit (barrel vs subpath imports of exports-map libs, esbuild metafile, `moduleResolution: bundler`), auth-token lifecycle under concurrency (singleton + init prefetch + expiry buffer + SigV4 nonce replay), observability tax (ADOT layer parse vs activation, in-process lite-SDK tracing checklist, credential-leak checks), and self-enforcing guardrails (lint bans, packaging/bundle contract tests, calibrated cold-start budgets). Includes a measured cold-start calibration table.
