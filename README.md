@@ -413,7 +413,7 @@ Commands are slash commands invoked as `/command-name` (or `/command-name <argum
 | `/getConfluencePage <page-id\|url\|title>` | Fetch and render a Confluence page as markdown (optional `--prompt` for analysis) |
 | `/getPRComments <pr-number>` | Fetch GitHub PR comments and analyze codebase in context (optional `--author` filter) |
 | `/review <pr-number>` | Run four parallel reviewers (functional, quality, performance, security) on a PR via hand-dispatched Agent calls and submit a GitHub review with inline comments |
-| `/review1 <pr-number> [--out <path>] [--no-post]` | Run six reviewers (the four above + ADR + data-side-effects) via the `review1-fanout` Workflow script, adversarially verify each CRITICAL/HIGH finding with a skeptic agent, then submit a GitHub review. `--out` writes the full review (frontmatter + every finding, verification, and refutation) to a markdown file; `--no-post` stops there without touching GitHub, for reviewing your own PRs into a file another process consumes. Requires the Workflow tool; falls back to telling you to run `/review` |
+| `/review1 <pr-number> [--out <path>] [--no-post]`<br>`/review1 --update [<pr-number>] [<report-path>]` | Run six reviewers (the four above + ADR + data-side-effects) via the `review1-fanout` Workflow script, adversarially verify each CRITICAL/HIGH finding with a skeptic agent, then submit a GitHub review. `--out` writes the full review (frontmatter + every finding, verification, and refutation) to a markdown file; `--no-post` stops there without touching GitHub, for reviewing your own PRs into a file another process consumes. Requires the Workflow tool; falls back to telling you to run `/review` |
 | `/codereview <pr-number>` | Pull down a PR and run the code-quality-reviewer agent on it |
 | `/codeReviewUpdate <commit-sha>` | Re-review after changes have been made to a PR |
 | `/create-pr` | Add, commit, push, and create a pull request via GitHub CLI |
@@ -458,6 +458,7 @@ Plain JavaScript scripts executed by Claude Code's built-in **Workflow** tool. T
 | `skepticModel` | no | Model for Verify-phase skeptics. Omit to inherit the session model, so different models can be compared across runs |
 | `skepticEffort` | no | Reasoning effort for skeptics (`low` … `max`). Omit to inherit |
 | `scopeNote` | no | Replaces the default scope-bounds paragraph |
+| `priorFindings` | no | Follow-up mode. Findings from an earlier run on the same PR as `[{ id, severity, file, line, description }]`. Adds a **Recheck** phase (one agent per prior finding, cap 10) returning RESOLVED or OPEN with current-code evidence; `files` should be only the files changed since that run. Result gains a `recheck` array and new findings on a prior file:line carry `matchesPrior` |
 
 Design notes, decided when porting from srhoton/dotfiles PR #53:
 - Reviewers take their model from agent frontmatter (Opus, Sonnet for ADR). Skeptics inherit the session unless overridden.
@@ -473,6 +474,7 @@ Reference files agents read at dispatch time.
 
 | File | Purpose |
 |------|---------|
+| `conventions.md` | Team conventions that look like inconsistencies from the code alone, with the severity each should receive. All six reviewers read it before rating. Sourced from the canonical `prt-parts-svc/.claude/rules/` guides. Entries: **QAC/Xray test tags** — placeholders (`QAC-XXXX`, `QAC-TBD`) are LOW because developer PRs ship them and QA fills in the real ID; attaching a real ID to a different test (the guide forbids reuse), or stripping existing references, is MEDIUM; a scenario that merely moved files and kept its number is not flagged; real IDs are never flagged. **Piton environment tags** — a `@Tag("prod")` test that performs any write is HIGH, since `prod` executes against real production. Append a section whenever a review round flags an intentional convention. |
 | `defect-classes.md` | Red-team checklist of eight defect classes that fix rounds tend to introduce (fail-open defaults, unconditioned overwrites, serializer allow-list drops, stale literals, vacuous assertions, lockfile/package-manager mismatches, unverified-404 deletion, warn-log amplification). The functional and data-side-effects reviewers check every diff against it. Each entry's **History** line is a placeholder: record the first Fullbay incident that confirms the class, and append new classes when a review round confirms one. |
 
 ---
@@ -680,6 +682,8 @@ User: "Now analyze gaps against the design"
 
 Own-PR pattern: `/review1 42 --out ~/reviews/ --no-post` writes `~/reviews/review-PR42.md`, which a later session or worktree process can read and act on. Finding numbers in the file match the terminal display and the Step 5 selection list.
 
+Follow-up pattern: after the author pushes, `/review1 --update` (or its alias `/codeReviewUpdate <sha>` in the same session) runs review1's Follow-up section — it diffs from the reviewed SHA, re-invokes the workflow on only the changed files with the prior actionable findings as `priorFindings`, shows each as RESOLVED or OPEN with evidence, numbers new findings by continuing the original sequence, refreshes the `--out` report, and offers to post only the new findings. `--update` re-injects the full command instructions, so it stays reliable after a long session's context has been summarized; with a report path it also works in a fresh session.
+
 Dry-run baseline on an 8-file PR: 16 agents, 7–13 minutes, 0.6–0.9M subagent tokens.
 
 ---
@@ -850,9 +854,10 @@ allowed-tools: Bash(git:*), Read, Glob
 
 - **v7.0 (2026-09)**: Workflow-orchestrated PR review, ported from [srhoton/dotfiles PR #53](https://github.com/srhoton/dotfiles/pull/53)
   - Added `/review1` command — six reviewers via the Workflow tool with schema-validated findings, `file:line` dedup, and an adversarial Verify phase (one skeptic per CRITICAL/HIGH finding returning CONFIRMED / REFUTED / DOWNGRADE). `--out <path>` writes the full review to markdown with YAML frontmatter; `--no-post` stops there for own-PR review files. Workflow-only; points at `/review` when the tool is unavailable. `/review` is unchanged as the comparison baseline.
-  - Added `workflows/review1-fanout.js` — the orchestration script. Skeptics inherit the session model by default (`skepticModel` / `skepticEffort` args override) so models can be compared across runs. No per-agent verdict; review action defaults to Comment so developers can refute, with a nudge when a verified CRITICAL exists. CRITICAL/HIGH/MEDIUM pre-selected for posting.
+  - Added `workflows/review1-fanout.js` — the orchestration script. Skeptics inherit the session model by default (`skepticModel` / `skepticEffort` args override) so models can be compared across runs. Follow-up mode via `priorFindings` adds a Recheck phase (RESOLVED/OPEN per prior finding) so `/codeReviewUpdate` in the same session reconciles against the original numbering instead of re-reading free-form. No per-agent verdict; review action defaults to Comment so developers can refute, with a nudge when a verified CRITICAL exists. CRITICAL/HIGH/MEDIUM pre-selected for posting.
   - Added `data-side-effects-reviewer` agent — blast radius on already-persisted data (re-keying, unguarded status overwrites, schema bumps without companion artifacts, backfill safety). Adopted verbatim.
   - Added `knowledge/defect-classes.md` — eight fix-round defect-class heuristics checked by the functional and data-side-effects reviewers. History lines are placeholders for Fullbay incidents.
+  - Added `knowledge/conventions.md` — team conventions with fixed severities, read by all six reviewers. Starts with QAC/Xray test tags (placeholders LOW, re-mapped or stripped IDs MEDIUM) after five early runs rated placeholder tags MEDIUM as pattern inconsistency.
   - New `workflows/` and `knowledge/` directories are symlinked into `~/.claude` as whole directories; documented under Installation.
   - README correction: `/review` runs four reviewers, not five — ADR compliance was never in its dispatch list.
 

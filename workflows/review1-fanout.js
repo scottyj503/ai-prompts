@@ -2,6 +2,7 @@ export const meta = {
   name: 'review1-fanout',
   description: 'Six specialist reviewers in parallel, dedup by file:line, then one skeptic per CRITICAL/HIGH finding (confirm / refute / downgrade)',
   phases: [
+    { title: 'Recheck', detail: 'follow-up only: one agent per prior finding decides RESOLVED or OPEN' },
     { title: 'Review', detail: 'six specialist reviewers over the changed files' },
     { title: 'Verify', detail: 'one skeptic per CRITICAL/HIGH finding: confirm, refute, or downgrade' },
   ],
@@ -18,13 +19,19 @@ export const meta = {
 //   skepticModel?: string,   model override for Verify-phase skeptics; omit to inherit the session model
 //   skepticEffort?: string,  effort override for skeptics ('low'|'medium'|'high'|'xhigh'|'max'); omit to inherit
 //   scopeNote?: string,      replaces the default scope-bounds paragraph
+//   priorFindings?: [{ id, severity, file, line, description }]
+//                            follow-up mode: findings from an earlier run of this workflow on the same PR.
+//                            Each gets a Recheck agent (RESOLVED | OPEN) and `files` should be only the
+//                            files changed since that run. New findings are still reviewed and verified.
 // }
 const { repoRoot, files, intent, diffPath, skepticModel, skepticEffort } = args
+const priorFindings = Array.isArray(args.priorFindings) ? args.priorFindings : []
 if (!repoRoot || !Array.isArray(files) || !intent) {
   throw new Error('review1-fanout: args.repoRoot (string), args.files (string[]) and args.intent (string) are required')
 }
 
 const KNOWLEDGE = '~/.claude/knowledge/defect-classes.md'
+const CONVENTIONS = '~/.claude/knowledge/conventions.md'
 const ADR_ROOT = '/Users/scottjones/code/architecture-decisions'
 
 const scopeNote = args.scopeNote ||
@@ -84,11 +91,22 @@ const VERDICT_SCHEMA = {
   },
 }
 
+// Skeptic and Recheck agents share the same model/effort overrides (both inherit the session by default).
+function skepticOptsFor() {
+  const o = {}
+  if (skepticModel) o.model = skepticModel
+  if (skepticEffort) o.effort = skepticEffort
+  return o
+}
+
 const header =
   `Repo root: ${repoRoot}\n` +
   `Changed files (your ENTIRE review scope):\n${files.map(f => `- ${f}`).join('\n')}\n\n` +
   `${scopeNote}\n\n` +
   SEVERITY_GUIDE + FOCUS_RULES +
+  `TEAM CONVENTIONS: read ${CONVENTIONS} before rating anything. It lists team conventions that look like ` +
+  'inconsistencies from the code alone (e.g. QAC/Xray test tags) and fixes the severity for each. Where it ' +
+  'assigns a severity, use that severity — do not re-derive it from neighboring code.\n\n' +
   (diffPath
     ? `The PR diff is saved at ${diffPath} — read it FIRST to see exactly which lines changed, then read the full ` +
       'changed files and surrounding code for context. The diff tells you what to review; the files tell you whether it is right.\n\n'
@@ -154,6 +172,52 @@ const REVIEWERS = [
 ]
 
 // ---------------------------------------------------------------------------
+// Follow-up mode: re-check each prior finding against the current code before reviewing the delta.
+const RECHECK_SCHEMA = {
+  type: 'object',
+  required: ['status', 'reason'],
+  properties: {
+    status: {
+      type: 'string',
+      enum: ['RESOLVED', 'OPEN'],
+      description: 'RESOLVED = the defect is fixed in the current code; OPEN = still present (or fixed incorrectly/partially)',
+    },
+    reason: { type: 'string', description: 'file:line evidence in the CURRENT code supporting the status; if OPEN, say what is still wrong' },
+  },
+}
+const RECHECK_CAP = 10
+const recheck = []
+if (priorFindings.length) {
+  phase('Recheck')
+  const toRecheck = priorFindings.slice(0, RECHECK_CAP)
+  const beyondRecheckCap = priorFindings.slice(RECHECK_CAP)
+  if (beyondRecheckCap.length) log(`recheck cap: ${beyondRecheckCap.length} prior finding(s) beyond ${RECHECK_CAP} carried forward as OPEN (unchecked)`)
+  log(`rechecking ${toRecheck.length} prior finding(s) against the current code`)
+  const rechecked = await parallel(toRecheck.map(p => () =>
+    agent(
+      `Repo root: ${repoRoot}\n` +
+      `Files changed since the previous review:\n${files.map(f => `- ${f}`).join('\n')}\n\n` +
+      `A previous review of this PR reported finding ${p.id} (${p.severity}) at ${p.file}:${p.line}:\n` +
+      `  ${p.description}\n\n` +
+      'The author has since pushed changes. Read the CURRENT code at and around that location (line numbers may have ' +
+      'shifted — find the construct, not the number) and decide whether this specific defect is RESOLVED or still OPEN. ' +
+      'A fix that addresses the symptom but not the defect, or that introduces an obvious regression at the same site, is OPEN — ' +
+      'say what is still wrong. Cite file:line evidence from the current code. Stay within this repo.\n\n' +
+      (diffPath ? `The diff of the changes since the previous review is at ${diffPath}.\n` : ''),
+      { label: `recheck:${p.id}`, phase: 'Recheck', schema: RECHECK_SCHEMA, ...skepticOptsFor() }
+    ).then(v => ({ prior: p, verdict: v }))
+  ))
+  for (let i = 0; i < toRecheck.length; i++) {
+    const p = toRecheck[i]
+    const v = rechecked[i] && rechecked[i].verdict
+    recheck.push(v ? { ...p, status: v.status, reason: v.reason, checked: true }
+                   : { ...p, status: 'OPEN', reason: 'recheck agent skipped or errored', checked: false })
+  }
+  for (const p of beyondRecheckCap) recheck.push({ ...p, status: 'OPEN', reason: 'beyond recheck cap', checked: false })
+  log(`recheck: ${recheck.filter(r => r.status === 'RESOLVED').length} resolved, ${recheck.filter(r => r.status === 'OPEN').length} open`)
+}
+
+// ---------------------------------------------------------------------------
 phase('Review')
 // Barrier is intentional: dedup below needs the full finding set from all six reviewers.
 const reviews = await parallel(REVIEWERS.map(r => () =>
@@ -191,9 +255,7 @@ const toVerify = candidateActionable.slice(0, VERIFY_CAP)
 const unverified = candidateActionable.slice(VERIFY_CAP)
 if (unverified.length) log(`verify cap: ${unverified.length} CRITICAL/HIGH finding(s) beyond ${VERIFY_CAP} pass through UNVERIFIED`)
 
-const skepticOpts = {}
-if (skepticModel) skepticOpts.model = skepticModel
-if (skepticEffort) skepticOpts.effort = skepticEffort
+const skepticOpts = skepticOptsFor()
 const skepticDesc = `model=${skepticModel || 'session'} effort=${skepticEffort || 'session'}`
 
 const actionable = []
@@ -243,10 +305,21 @@ for (const f of unverified) actionable.push({ ...f, verified: false })
 const downgraded = informational.filter(f => f.downgradedFrom).length
 log(`${actionable.length} actionable, ${refuted.length} refuted, ${downgraded} downgraded, ${informational.length} informational`)
 
+// In follow-up mode, tag new findings that land on a prior finding's file:line so the caller can
+// treat them as the same defect rather than a duplicate. Line numbers may have shifted, so this is a hint only.
+if (priorFindings.length) {
+  const priorByKey = new Map(priorFindings.map(p => [`${p.file}:${p.line}`, p.id]))
+  for (const f of [...actionable, ...informational]) {
+    const hit = priorByKey.get(`${f.file}:${f.line}`)
+    if (hit) f.matchesPrior = hit
+  }
+}
+
 return {
   actionable,
   informational,
   refuted,
   reviewersSkipped,
   verify: { cap: VERIFY_CAP, unverifiedBeyondCap: unverified.length, skeptic: skepticDesc },
+  recheck,
 }
