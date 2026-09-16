@@ -71,11 +71,11 @@ It returns `{ actionable, informational, refuted, reviewersSkipped, verify, rech
 - `refuted` — findings disproved with cited evidence. Never propose them as PR comments. Always show them so the user can spot-check the refutation.
 - `reviewersSkipped` — reviewers that returned nothing (skipped or errored). If non-empty, say so in the report.
 - `verify` — the cap, how many findings passed through unverified beyond it, and which skeptic model/effort ran.
-- `recheck` — empty on a first run. In follow-up mode (see **Follow-up** below), one entry per prior finding with `status: RESOLVED | OPEN`, a `reason` citing current code, and `checked: false` when the agent errored or the finding was beyond the recheck cap.
+- `recheck` — empty on a first run. In follow-up mode (see **Follow-up** below), one entry per prior finding with `status: RESOLVED | OPEN | WITHDRAWN`, an `authorResponse` of `NONE | FIX_CLAIMED | REBUTTAL | DEFERRED | QUESTION`, a `reason` citing current code, and `checked: false` when the agent errored or the finding was beyond the recheck cap. WITHDRAWN means the author rebutted the finding and the code confirms they were right.
 
 If the Workflow call itself errors, report the error and stop. Do not retry with hand-dispatched agents.
 
-**Remember for later in this session:** the PR number, the reviewed head SHA, the `--out` path if any, and the displayed finding numbers (A1…, I1…, R1…). The Follow-up section needs them.
+**Remember for later in this session:** the PR number, the reviewed head SHA, the review timestamp (`date -u +%Y-%m-%dT%H:%M:%SZ`, taken now), the `--out` path if any, the displayed finding numbers (A1…, I1…, R1…), and after Step 6 the finding-to-comment-ID map. The Follow-up section needs all of them.
 
 ---
 
@@ -249,12 +249,22 @@ gh api repos/{owner}/{repo}/pulls/{number}/reviews \
       "path": "<file>",
       "line": <line>,
       "side": "RIGHT",
-      "body": "**[SEVERITY]** Issue description\n\n**Suggested fix:** suggestion\n\n_Source: reviewer-name_"
+      "body": "**[SEVERITY] A1** Issue description\n\n**Suggested fix:** suggestion\n\n_A1 · Source: reviewer-name_"
     }
   ]
 }
 JSON
 ```
+
+Every comment body carries the finding ID (`A1`, `I3`, …) twice — in the bold header and in the trailing source line — so the author can refer to it in a reply and so the Follow-up can map replies back to findings.
+
+After the review posts, fetch the IDs GitHub assigned to each inline comment and pair them with finding IDs by path and line:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{number}/reviews/<review_id>/comments --jq '.[] | {id, path, line, body: .body[0:40]}'
+```
+
+Keep the `finding ID → comment ID` map; it goes into the Posting Record and drives reply matching in the Follow-up.
 
 Where `<EVENT>` maps from the user's chosen verdict:
 - "Comment" → `"COMMENT"`
@@ -266,20 +276,22 @@ For a verified actionable finding, append `_Verified: <verification reason>_` to
 **Only include findings whose lines resolved to the diff** (Step 4). For any findings flagged as outside the diff, post them as general PR comments:
 
 ```bash
-gh pr comment <number> --body "**[SEVERITY]** \`file:line\`
+gh pr comment <number> --body "**[SEVERITY] A4** \`file:line\`
 
 <finding description>
 
 **Suggested fix:** <suggestion>
 
-_Source: reviewer-name_"
+_A4 · Source: reviewer-name_"
 ```
+
+`gh pr comment` prints the comment URL; its trailing number is the comment ID. Record it in the same map.
 
 ---
 
 Print a summary: "Submitted review on PR #<number> with N inline comments (verdict: VERDICT). Posted M fallback comments. Skipped K findings. R findings refuted by verification (not posted)."
 
-**If `--out` was given**, update the report file to record what happened: replace `posted: pending` in the frontmatter with `posted: <COMMENT|APPROVE|REQUEST_CHANGES|skipped>`, and replace the `## Posting Record` body with the review URL (from the `gh api` response's `html_url`), the verdict, and the list of finding numbers (A1, I3, …) that were posted inline, posted as fallback comments, or skipped. If the user chose "Skip all", record `posted: skipped` and "Not posted — user skipped."
+**If `--out` was given**, update the report file to record what happened: replace `posted: pending` in the frontmatter with `posted: <COMMENT|APPROVE|REQUEST_CHANGES|skipped>`, and replace the `## Posting Record` body with the review URL (from the `gh api` response's `html_url`), the verdict, the review's `id`, the timestamp, and one line per posted finding in the form `A1 → inline comment <comment_id>` or `A4 → general comment <comment_id>`, followed by the list of skipped finding IDs. If the user chose "Skip all", record `posted: skipped` and "Not posted — user skipped." The comment IDs are what the Follow-up uses to find the author's replies.
 
 ---
 
@@ -301,9 +313,29 @@ git diff <reviewed_sha> HEAD > /tmp/review1-PR<number>-followup.diff
 
 `<reviewed_sha>` is the head SHA recorded when the review ran (or the report's `head_sha`; after a previous follow-up, the last entry in `followups`). If a `<sha>` was given via `/codeReviewUpdate` and it is not the current head, say so and use HEAD. If no files changed, say "No changes since the review at <reviewed_sha>." and stop.
 
+### F1.5. Fetch the author's replies (skip if nothing was posted)
+
+If the original run posted to GitHub (Posting Record has comment IDs, or you posted in this session), fetch what the author has said since:
+
+```bash
+# Inline review comments, including replies; keep those newer than the review
+gh api repos/{owner}/{repo}/pulls/{number}/comments --paginate \
+  --jq '.[] | select(.created_at > "<reviewed_at>") | {id, in_reply_to_id, path, line, original_line, user: .user.login, created_at, body}'
+
+# General PR comments newer than the review
+gh api repos/{owner}/{repo}/issues/{number}/comments --paginate \
+  --jq '.[] | select(.created_at > "<reviewed_at>") | {id, user: .user.login, created_at, body}'
+```
+
+Map each reply to a prior finding, in this order: (1) `in_reply_to_id` equals a comment ID in the Posting Record; (2) the body mentions a finding ID such as `A3` or `I2` (word-bounded); (3) same `path` and a `line`/`original_line` within a few lines of the finding. Drop replies you posted yourself as the reviewer (the review's own comments and your earlier threaded replies), but keep replies from any other account — when the PR is your own, the author and the reviewer are the same login and mapping by `in_reply_to_id` still works. A general comment that maps to no finding is shown in F4 under "Unmapped author comments" and passed to no agent.
+
+Do not classify the replies yourself. Attach them raw; the Recheck agent classifies and verifies them against the code.
+
+If nothing was posted (`--no-post`, or the user skipped posting), say "No posted comments, so no author replies to check." and skip this step.
+
 ### F2. Build `priorFindings`
 
-Every **actionable** finding from the original run (A1…), plus any informational finding that was **posted** to the PR (from the Posting Record or your memory of Step 6). Each entry: `{ id: "A1", severity, file, line, description }`, using the original file:line and full description. Do not include refuted findings or unposted informational ones — the author was never asked to act on them.
+Every **actionable** finding from the original run (A1…), plus any informational finding that was **posted** to the PR (from the Posting Record or your memory of Step 6). Each entry: `{ id: "A1", severity, file, line, description, authorReplies }`, using the original file:line and full description, with `authorReplies` as the list from F1.5 for that finding (`[{ author, at, body }]`, empty if none). Do not include refuted findings or unposted informational ones — the author was never asked to act on them.
 
 ### F3. Invoke the workflow in follow-up mode
 
@@ -315,7 +347,7 @@ Same `scriptPath`; `args`:
 - `priorFindings`: the F2 list
 - `skepticModel` / `skepticEffort`: same as the original run, if any were given
 
-The workflow adds a **Recheck** phase (one agent per prior finding, cap 10, RESOLVED or OPEN with evidence) before the normal six-reviewer fan-out on the changed files. New findings that land on a prior finding's file:line carry `matchesPrior: "<id>"`.
+The workflow adds a **Recheck** phase (one agent per prior finding, cap 10) before the normal six-reviewer fan-out on the changed files. Each recheck returns `status` RESOLVED, OPEN, or WITHDRAWN with cited evidence, and `authorResponse` NONE, FIX_CLAIMED, REBUTTAL, DEFERRED, or QUESTION. A fix claim the code does not bear out stays OPEN; a rebuttal the code confirms becomes WITHDRAWN. New findings that land on a prior finding's file:line carry `matchesPrior: "<id>"`.
 
 ### F4. Display the reconciliation
 
@@ -323,27 +355,35 @@ The workflow adds a **Recheck** phase (one agent per prior finding, cap 10, RESO
 ## Follow-up: <reviewed_sha> → <new sha>  (<n> files changed)
 
 ## Prior findings
-A1  CRITICAL | .claude/bin/mutation-probe:48 | RESOLVED | <reason>
-A2  HIGH     | src/Foo.java:112              | OPEN     | <reason — what is still wrong>
-A5  HIGH     | src/Bar.java:29               | OPEN     | beyond recheck cap (unchecked)
+A1  CRITICAL | .claude/bin/mutation-probe:48 | RESOLVED  | FIX_CLAIMED | <reason>
+A2  HIGH     | src/Foo.java:112              | OPEN      | FIX_CLAIMED | <reason — what is still wrong, and why the reply does not hold>
+A3  HIGH     | src/Baz.java:40               | WITHDRAWN | REBUTTAL    | <what the original finding got wrong>
+A4  HIGH     | src/Qux.java:77               | OPEN      | DEFERRED    | <reason>  (author: "will address in PARTS-1234")
+A5  HIGH     | src/Bar.java:29               | OPEN      | NONE        | beyond recheck cap (unchecked)
+
+## Unmapped author comments
+<any general comments since the review that mapped to no finding, quoted briefly — or "none">
 
 ## New findings (from the changed files)
-[A9]  HIGH   | src/Foo.java:118 | <description> | functional | verified
-[I12] MEDIUM | ...
+A9   HIGH   | src/Foo.java:118 | <description> | functional | verified
+I12  MEDIUM | ...
 
 ## Refuted by verification (new findings only)
 none
 ```
 
 Rules:
+- For every prior finding with a REBUTTAL, print the author's reply beneath the row, then the agent's verdict on it. A rebuttal is the one place the author explicitly asked to be heard; the user should see both sides without opening the PR.
+- WITHDRAWN findings are closed. Say so plainly and do not carry them into any later follow-up's `priorFindings`.
 - Keep the original numbering for prior findings. Number new findings by continuing the original sequence (if the first run ended at A8 and I11, new ones start at A9 and I12), so numbers stay unique across the session.
 - A new finding with `matchesPrior` is shown under the prior finding as "still flagged at the same site" rather than as a separate new item, unless its description is clearly a different defect.
 - Prior findings marked `checked: false` are listed as OPEN with the reason shown; say plainly that they were not re-checked.
 
 ### F5. Report file and posting
 
-- If the original run used `--out`, rewrite the same file: update `head_sha` and `reviewed_at` in the frontmatter, add `followups: [<new sha>]` (append on each follow-up), set each prior finding's section to include a `**Status (<new sha>):** RESOLVED|OPEN — <reason>` line, and append the new findings under the existing A/I/R sections with their continued numbers. The file must still contain every finding ever raised on this PR.
-- Then run Steps 4–6 on the **new** findings only, with the same defaults (CRITICAL/HIGH/MEDIUM pre-selected, action defaults to Comment). Do not re-post prior findings. If a prior finding is OPEN and the user wants to say so on the PR, offer it as a reply in Step 5's "Let me pick" path rather than a new inline comment.
+- If the original run used `--out`, rewrite the same file: update `head_sha` and `reviewed_at` in the frontmatter, add `followups: [<new sha>]` (append on each follow-up), set each prior finding's section to include a `**Status (<new sha>):** RESOLVED|OPEN|WITHDRAWN — <reason>` line and, when the author replied, an `**Author response:** <FIX_CLAIMED|REBUTTAL|DEFERRED|QUESTION> — "<reply, quoted>"` line above it, and append the new findings under the existing A/I/R sections with their continued numbers. The file must still contain every finding ever raised on this PR.
+- Then run Steps 4–6 on the **new** findings only, with the same defaults (CRITICAL/HIGH/MEDIUM pre-selected, action defaults to Comment). Do not re-post prior findings.
+- **Threaded replies on prior findings** are offered separately, after the new-findings selection, as a second `AskUserQuestion` with none pre-selected. Candidates: each WITHDRAWN finding (a short acknowledgement that the author was right, with the agent's reason), each OPEN finding whose author response was FIX_CLAIMED or REBUTTAL (the counter-evidence, cited), and each QUESTION (an answer drawn from the original finding and the code). Post accepted ones with `gh api repos/{owner}/{repo}/pulls/{number}/comments/<comment_id>/replies -f body=...` so they land in the existing thread, never as new inline comments. Skip this question entirely if no prior finding has an author response.
 - If `--no-post` governed the original run, it governs the follow-up too: write the file and stop.
 
-Print a summary: "Follow-up on PR #<number>: R resolved, O open, N new findings (V verified). <posting summary or 'Not posted'>."
+Print a summary: "Follow-up on PR #<number>: R resolved, O open, W withdrawn (B author rebuttals, F fix claims). N new findings (V verified). <posting summary or 'Not posted'>. <T threaded replies posted, or none>."
